@@ -780,27 +780,50 @@ fn render_html(username: &str, is_watch: bool) -> String {
     <html lang="zh-CN">
       <head>
         <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
         <title>Quiz 接龙</title>
         <link rel="stylesheet" href="https://csstools.github.io/sanitize.css/13.0.0/sanitize.css" />
         <style>
           :root {{ --bg: #f4f4f4; --text: #333; --cell-size: 40px; }}
           body {{ font-family: monospace; background: var(--bg); color: var(--text); margin: 0; padding: 0; height: 100vh; display: flex; overflow: hidden; }}
-          * {{ border-radius: 0 !important; }}
-          .sidebar {{ width: 250px; background: #e0e0e0; border-right: 2px solid #000; display: flex; flex-direction: column; }}
-          .main {{ flex: 1; display: flex; flex-direction: column; }}
-          .log-panel {{ width: 300px; background: #fff; border-left: 2px solid #000; overflow-y: auto; font-size: 12px; padding: 10px; }}
-          .header {{ height: 60px; border-bottom: 2px solid #000; display: flex; align-items: center; justify-content: center; font-size: 1.2em; font-weight: bold; background: #fff; }}
+          * {{ border-radius: 0 !important; box-sizing: border-box; }}
+
+          /* PC Layout */
+          .sidebar {{ width: 250px; background: #e0e0e0; border-right: 2px solid #000; display: flex; flex-direction: column; overflow-y: auto; flex-shrink: 0; }}
+          .main {{ flex: 1; display: flex; flex-direction: column; overflow: hidden; }}
+          .log-panel {{ width: 300px; background: #fff; border-left: 2px solid #000; overflow-y: auto; font-size: 12px; padding: 10px; flex-shrink: 0; }}
+
+          /* Mobile Layout */
+          @media (max-width: 800px) {{
+            body {{ flex-direction: column; height: auto; overflow-y: auto; }}
+            .sidebar {{ width: 100%; height: 180px; border-right: none; border-top: 2px solid #000; order: 2; }}
+            .main {{ width: 100%; min-height: 60vh; order: 1; }}
+            .log-panel {{ width: 100%; height: 200px; border-left: none; border-top: 2px solid #000; order: 3; }}
+          }}
+
+          .header {{ height: 60px; border-bottom: 2px solid #000; display: flex; align-items: center; justify-content: center; font-size: 1.1em; font-weight: bold; background: #fff; padding: 0 10px; }}
           .content {{ flex: 1; padding: 20px; overflow-y: auto; display: flex; justify-content: center; align-items: flex-start; }}
-          .controls {{ height: 80px; border-top: 2px solid #000; background: #ddd; display: flex; align-items: center; justify-content: center; gap: 20px; }}
-          .grid {{ display: grid; grid-template-columns: repeat(auto-fill, var(--cell-size)); gap: 2px; width: 100%; max-width: 800px; border: 2px solid #000; background: #000; }}
-          .cell {{ width: var(--cell-size); height: var(--cell-size); background: #000; color: #000; display: flex; align-items: center; justify-content: center; font-size: 20px; font-weight: bold; }}
-          .player-item {{ padding: 10px; border-bottom: 1px solid #999; display: flex; justify-content: space-between; align-items: center; }}
+          .controls {{ min-height: 80px; height: auto; border-top: 2px solid #000; background: #ddd; display: flex; align-items: center; justify-content: center; gap: 10px; padding: 10px; flex-wrap: wrap; }}
+
+          .grid {{ display: grid; grid-template-columns: repeat(auto-fill, var(--cell-size)); gap: 4px; width: 100%; max-width: 800px; padding: 10px; background: transparent; }}
+          .cell {{
+            width: var(--cell-size); height: var(--cell-size);
+            background: #222; /* 默认未翻开颜色 */
+            border: 1px solid #555; /* 增加边框以便看清空格子 */
+            color: #000; display: flex; align-items: center; justify-content: center;
+            font-size: 20px; font-weight: bold;
+          }}
+
+          .player-item {{ padding: 10px; border-bottom: 1px solid #999; display: flex; justify-content: space-between; align-items: center; font-size: 14px; }}
           .player-status {{ font-size: 10px; padding: 2px 4px; background: #333; color: #fff; }}
-          button {{ padding: 10px 20px; border: 2px solid #000; background: #fff; cursor: pointer; font-weight: bold; font-size: 16px; }}
+
+          button {{ padding: 12px 20px; border: 2px solid #000; background: #fff; cursor: pointer; font-weight: bold; font-size: 16px; min-width: 80px; }}
           button:hover {{ background: #eee; }}
-          input[type="text"] {{ padding: 10px; border: 2px solid #000; width: 300px; font-size: 16px; }}
-          .active-turn {{ border: 4px solid red; }}
-          #result-area {{ display: none; padding: 20px; background: #fff; border: 2px solid #000; margin-top: 20px; width: 100%; }}
+          button:active {{ background: #ccc; }}
+          input[type="text"] {{ padding: 10px; border: 2px solid #000; width: 100%; max-width: 300px; font-size: 16px; }}
+
+          .active-turn {{ border-left: 6px solid red; background: #fff0f0; }}
+          #result-area {{ display: none; padding: 20px; background: #fff; border: 2px solid #000; margin-top: 20px; width: 100%; max-width: 800px; }}
         </style>
       </head>
       <body>
@@ -827,13 +850,13 @@ fn render_html(username: &str, is_watch: bool) -> String {
 
           function connect() {{
               const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-              // 修复：观战模式强制添加 spectate 参数，避免服务端误读浏览器缓存的身份认证信息
               const qs = isWatch ? '?spectate=true' : '';
               socket = new WebSocket(`${{protocol}}//${{window.location.host}}/ws${{qs}}`);
               socket.onopen = () => {{
                   log("系统", "已连接服务器");
                   document.getElementById('status-text').innerText = "已连接";
                   setInterval(() => socket.send(JSON.stringify({{ type: "Heartbeat", data: null }})), 5000);
+                  if (!timerInterval) timerInterval = setInterval(updateUiTimer, 100);
               }};
               socket.onmessage = (event) => {{
                   const msg = JSON.parse(event.data);
@@ -841,23 +864,57 @@ fn render_html(username: &str, is_watch: bool) -> String {
                   else if (msg.type === 'log') {{ const parts = msg.data.split(' [系统] '); log("系统", parts[1], parts[0]); }}
                   else if (msg.type === 'error') {{ alert(msg.data); }}
               }};
-              socket.onclose = () => {{ log("系统", "连接断开，尝试重连..."); setTimeout(connect, 3000); }};
+              socket.onclose = () => {{
+                log("系统", "连接断开，尝试重连...");
+                setTimeout(connect, 3000);
+              }};
           }}
+
           function log(who, text, time) {{
               const box = document.getElementById('log-box');
               const div = document.createElement('div');
               div.style.marginBottom = "4px";
+              div.style.wordBreak = "break-all"; // 防止长单词撑开
               div.innerText = `${{time || new Date().toLocaleTimeString('en-GB')}} [${{who}}] ${{text}}`;
               box.appendChild(div);
               box.scrollTop = box.scrollHeight;
           }}
+
           function sendAction(act) {{ socket.send(JSON.stringify({{ type: "Action", data: {{ action: act }} }})); }}
           function sendAnswer() {{ socket.send(JSON.stringify({{ type: "Answer", data: {{ content: document.getElementById('ans-input').value }} }})); }}
 
-          function render() {{
-              document.getElementById('hint-box').innerText = gameState.phase === 'Settlement' ?
-                  "比赛结束 - 正确答案: " + gameState.correct_answer : (gameState.hint || "等待开始...");
+          function updateUiTimer() {{
+             if (!gameState) return;
+             // 更新取字按钮倒计时
+             const takeBtn = document.getElementById('timer-val-take');
+             if (takeBtn && gameState.turn_deadline_ms) {{
+                 const deadline = Date.now() + (gameState.turn_deadline_ms || 0);
+             }}
 
+             if (gameState._localTargetTime) {{
+                 const rem = Math.max(0, (gameState._localTargetTime - Date.now()) / 1000);
+                 const els = document.querySelectorAll('.timer-text');
+                 els.forEach(el => el.innerText = rem.toFixed(1) + 's');
+             }}
+          }}
+
+          function render() {{
+              // 记录本地目标时间用于倒计时动画
+              if (gameState.turn_deadline_ms) {{
+                 gameState._localTargetTime = Date.now() + gameState.turn_deadline_ms;
+              }} else if (gameState.answer_deadline_ms) {{
+                 gameState._localTargetTime = Date.now() + gameState.answer_deadline_ms;
+              }} else {{
+                 gameState._localTargetTime = null;
+              }}
+
+              // 头部提示 + 总字数
+              const totalChars = gameState.grid.length;
+              const hintText = gameState.phase === 'Settlement' ?
+                  "比赛结束" : (gameState.hint || "等待开始...");
+              document.getElementById('hint-box').innerText = `${{hintText}} (共 ${{totalChars}} 字)`;
+
+              // 玩家列表
               const pList = document.getElementById('player-list');
               pList.innerHTML = '';
               gameState.players.forEach(p => {{
@@ -869,6 +926,7 @@ fn render_html(username: &str, is_watch: bool) -> String {
                   pList.appendChild(div);
               }});
 
+              // 棋盘格
               const grid = document.getElementById('grid-box');
               grid.innerHTML = '';
               gameState.grid.forEach(cell => {{
@@ -876,45 +934,61 @@ fn render_html(username: &str, is_watch: bool) -> String {
                   div.className = 'cell';
                   if (cell.owner_color_hue !== null) div.style.backgroundColor = `hsl(${{cell.owner_color_hue}}, 70%, 80%)`;
                   if (cell.char_content) div.innerText = cell.char_content;
-                  // 未被占用的格子，CSS 默认背景为黑色，满足显示需求
                   grid.appendChild(div);
               }});
 
-              const ctrl = document.getElementById('control-box');
-              if (timerInterval) {{ clearInterval(timerInterval); timerInterval = null; }}
+              // 结果显示 ( Settlement 阶段对所有人可见 )
+              const resArea = document.getElementById('result-area');
+              if (gameState.phase === 'Settlement') {{
+                  resArea.style.display = 'block';
+                  let html = `<h3>正确答案：${{gameState.correct_answer}}</h3>
+                              <h4>完整题面：</h4><p style="word-break:break-all">${{gameState.full_problem}}</p>
+                              <h4>玩家回答：</h4><ul>`;
+                  gameState.players.forEach(p => {{
+                      let color = p.answer === gameState.correct_answer ? 'green' : 'red';
+                      let showAns = p.answer === null ? '(未提交)' : (p.answer === '' ? '(空)' : p.answer);
+                      html += `<li style="color:${{color}}">${{p.id}}: ${{showAns}}</li>`;
+                  }});
+                  resArea.innerHTML = html + '</ul>';
+              }} else {{
+                  resArea.style.display = 'none';
+              }}
 
-              if (isWatch) {{ ctrl.innerHTML = '<div>观战模式</div>'; return; }}
+              // 控制栏
+              const ctrl = document.getElementById('control-box');
+
+              // 观战模式显示
+              if (isWatch) {{
+                  ctrl.innerHTML = '<div>正在观战中...</div>';
+                  return;
+              }}
+
               const me = gameState.players.find(p => p.is_me);
               if (!me) {{ ctrl.innerHTML = ''; return; }}
 
               if (gameState.phase === 'Picking') {{
                   if (me.status === 'Picking') {{
-                      const deadline = Date.now() + (gameState.turn_deadline_ms || 0);
-                      ctrl.innerHTML = `<button id="btn-take" onclick="sendAction('take')">要一个字</button><button onclick="sendAction('stop')" style="background:#fdd">停止</button>`;
-
-                      const btn = document.getElementById('btn-take');
-                      const updateTimer = () => {{
-                          const rem = Math.max(0, (deadline - Date.now()) / 1000);
-                          btn.innerText = `要一个字 (${{rem.toFixed(2)}}s)`;
-                          if (rem <= 0 && timerInterval) clearInterval(timerInterval);
-                      }};
-                      updateTimer();
-                      timerInterval = setInterval(updateTimer, 30);
-                  }} else ctrl.innerHTML = `<div>等待他人操作...</div>`;
+                      // 这里的 timer-text 会被 updateUiTimer 更新
+                      ctrl.innerHTML = `<button onclick="sendAction('take')">要一个字 (<span class="timer-text">--</span>)</button>
+                                        <button onclick="sendAction('stop')" style="background:#fdd">停止</button>`;
+                  }} else {{
+                      ctrl.innerHTML = `<div>等待他人操作...</div>`;
+                  }}
               }} else if (gameState.phase === 'Answering') {{
-                  if (me.status === 'Submitted') ctrl.innerHTML = `<div>答案已提交</div>`;
-                  else ctrl.innerHTML = `<input type="text" id="ans-input" placeholder="输入答案..." value="${{me.answer || ''}}"><button onclick="sendAnswer()">提交 (${{Math.ceil((gameState.answer_deadline_ms || 0)/1000)}}s)</button>`;
+                  if (me.status === 'Submitted') {{
+                      ctrl.innerHTML = `<div>答案已提交，等待其他人...</div>`;
+                  }} else {{
+                      ctrl.innerHTML = `<input type="text" id="ans-input" placeholder="输入答案..." value="${{me.answer || ''}}">
+                                        <button onclick="sendAnswer()">提交 (<span class="timer-text">--</span>)</button>`;
+                  }}
               }} else if (gameState.phase === 'Settlement') {{
                   ctrl.innerHTML = `<div>游戏结束</div>`;
-                  const resArea = document.getElementById('result-area');
-                  resArea.style.display = 'block';
-                  let html = `<h3>完整题面：</h3><p>${{gameState.full_problem}}</p><h3>玩家回答：</h3><ul>`;
-                  gameState.players.forEach(p => {{
-                      let color = p.answer === gameState.correct_answer ? 'green' : 'red';
-                      html += `<li style="color:${{color}}">${{p.id}}: ${{p.answer || '无'}}</li>`;
-                  }});
-                  resArea.innerHTML = html + '</ul>';
-              }} else ctrl.innerHTML = `<div>等待管理员 /start</div>`;
+              }} else {{
+                  ctrl.innerHTML = `<div>等待管理员 /start</div>`;
+              }}
+
+              // 立即触发一次 Timer UI 更新，避免闪烁
+              updateUiTimer();
           }}
           connect();
         </script>
