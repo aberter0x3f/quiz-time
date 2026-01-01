@@ -978,8 +978,16 @@ fn render_html(username: &str, is_watch: bool) -> String {
                   if (me.status === 'Submitted') {{
                       ctrl.innerHTML = `<div>答案已提交，等待其他人...</div>`;
                   }} else {{
-                      ctrl.innerHTML = `<input type="text" id="ans-input" placeholder="输入答案..." value="${{me.answer || ''}}">
+                      // 在重绘前尝试获取已存在的输入框的值，如果存在则保留
+                      const oldInput = document.getElementById('ans-input');
+                      const draft = oldInput ? oldInput.value : (me.answer || '');
+
+                      ctrl.innerHTML = `<input type="text" id="ans-input" placeholder="输入答案...">
                                         <button onclick="sendAnswer()">提交 (<span class="timer-text">--</span>)</button>`;
+
+                      // 恢复输入值
+                      const newInput = document.getElementById('ans-input');
+                      if (newInput) newInput.value = draft;
                   }}
               }} else if (gameState.phase === 'Settlement') {{
                   ctrl.innerHTML = `<div>游戏结束</div>`;
