@@ -2,7 +2,7 @@ use axum::{
   Router,
   body::Body,
   extract::{
-    State,
+    Query, State,
     ws::{Message, WebSocket, WebSocketUpgrade},
   },
   http::{HeaderMap, StatusCode, header},
@@ -70,7 +70,7 @@ struct GameState {
   server_password: String,
 }
 
-// 内部消息广播，用于通知更新或日志
+// 内部消息广播
 #[derive(Clone, Debug)]
 enum InternalMsg {
   StateUpdated,
@@ -92,7 +92,7 @@ enum ClientMsg {
   Answer { content: String },
 }
 
-// 下发给客户端的视图数据（脱敏后）
+// 下发给客户端的视图数据
 #[derive(Serialize)]
 struct ClientView {
   phase: GamePhase,
@@ -192,7 +192,7 @@ async fn main() {
     .route("/ws", get(ws_handler))
     .with_state(app_state);
 
-  let addr = SocketAddr::from(([0, 0, 0, 0], 3000));
+  let addr = SocketAddr::from(([0, 0, 0, 0], 8080));
   println!("Server listening on {}", addr);
   let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
   axum::serve(listener, app).await.unwrap();
@@ -256,7 +256,7 @@ async fn start_game(game: Arc<RwLock<GameState>>, tx: broadcast::Sender<Internal
   let mut rng = rand::thread_rng();
   g.players.shuffle(&mut rng);
 
-  // 分配色相，需要先拷贝一份 ID 列表避免同时借用
+  // 分配色相
   let player_ids = g.players.clone();
   let count = player_ids.len();
   for (i, id) in player_ids.iter().enumerate() {
@@ -272,6 +272,7 @@ async fn start_game(game: Arc<RwLock<GameState>>, tx: broadcast::Sender<Internal
 
   // 首位玩家开始
   g.turn_deadline = Some(Instant::now() + Duration::from_secs(3));
+
   if let Some(first_id) = g.players.first().cloned() {
     if let Some(p) = g.player_map.get_mut(&first_id) {
       p.status = PlayerStatus::Picking;
@@ -290,7 +291,7 @@ async fn game_loop(game: Arc<RwLock<GameState>>, tx: broadcast::Sender<InternalM
     let mut g = game.write().await;
     let now = Instant::now();
 
-    // 检查断线超时（30s）
+    // 检查断线超时
     if g.phase != GamePhase::Waiting && g.phase != GamePhase::Settlement {
       let mut timed_out_ids = Vec::new();
       for (id, p) in &g.player_map {
@@ -316,7 +317,7 @@ async fn game_loop(game: Arc<RwLock<GameState>>, tx: broadcast::Sender<InternalM
       }
     }
 
-    // 取字阶段 3s 超时
+    // 取字阶段超时
     if g.phase == GamePhase::Picking {
       if let Some(deadline) = g.turn_deadline {
         if now > deadline {
@@ -325,7 +326,7 @@ async fn game_loop(game: Arc<RwLock<GameState>>, tx: broadcast::Sender<InternalM
       }
     }
 
-    // 答题阶段 60s 超时
+    // 答题阶段超时
     if g.phase == GamePhase::Answering {
       if let Some(deadline) = g.answer_deadline {
         if now > deadline {
@@ -378,9 +379,8 @@ fn advance_turn(g: &mut GameState, tx: &broadcast::Sender<InternalMsg>) {
   let mut next_idx = (start_idx + 1) % g.players.len();
 
   // 寻找下一个状态为 Waiting 的玩家
-  // 注意：玩家状态流转为 Waiting -> Picking -> (Take Loop) -> Stopped
-  // 此处需要找到下一个还有资格取字（Waiting）的玩家
   let mut found_valid = false;
+
   for _ in 0..g.players.len() {
     let pid = &g.players[next_idx];
     if let Some(p) = g.player_map.get(pid) {
@@ -399,12 +399,9 @@ fn advance_turn(g: &mut GameState, tx: &broadcast::Sender<InternalMsg>) {
     .count();
 
   if !found_valid {
-    // 无人等待，全员进入答题
     enter_answering_phase(g, tx);
   } else if waiting_count == 1 {
-    // 只剩一人，该人获得剩余所有字
     let last_pid = g.players[next_idx].clone();
-
     let remaining_len = g.problem_text.len() - g.cursor;
     if remaining_len > 0 {
       if let Some(p) = g.player_map.get_mut(&last_pid) {
@@ -482,8 +479,7 @@ fn check_all_submitted(g: &mut GameState, tx: &broadcast::Sender<InternalMsg>) {
 fn check_auth(auth_header: Option<&str>, password: &str) -> Option<String> {
   if let Some(header) = auth_header {
     if header.starts_with("Basic ") {
-      let b64 = &header[6..];
-      if let Ok(decoded) = base64::decode(b64) {
+      if let Ok(decoded) = base64::decode(&header[6..]) {
         if let Ok(s) = String::from_utf8(decoded) {
           if let Some((u, p)) = s.split_once(':') {
             if p == password {
@@ -528,14 +524,20 @@ async fn ws_handler(
   ws: WebSocketUpgrade,
   State(state): State<Arc<AppState>>,
   headers: HeaderMap,
+  Query(params): Query<HashMap<String, String>>,
 ) -> Response {
   let game_r = state.game.read().await;
   let auth_header = headers
     .get(header::AUTHORIZATION)
     .and_then(|h| h.to_str().ok());
-  let user = check_auth(auth_header, &game_r.server_password);
-  drop(game_r);
+  let mut user = check_auth(auth_header, &game_r.server_password);
 
+  // 如果 URL 包含 spectate 参数，强制将用户视为匿名（观战者），忽略 Auth Header
+  if params.contains_key("spectate") {
+    user = None;
+  }
+
+  drop(game_r);
   ws.on_upgrade(move |socket| handle_socket(socket, state, user))
 }
 
@@ -546,61 +548,53 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>, user: Option<Str
     .clone()
     .unwrap_or_else(|| format!("Guest_{}", rand::random::<u16>()));
 
-  // 玩家注册逻辑
-  {
+  if !is_watcher {
     let mut g = state.game.write().await;
-    if !is_watcher {
-      if g.phase != GamePhase::Waiting && !g.player_map.contains_key(&username) {
-        let _ = sender
-          .send(Message::text(
-            serde_json::to_string(&serde_json::json!({
-                "type": "error", "data": "游戏已开始，禁止加入．"
-            }))
-            .unwrap(),
-          ))
-          .await;
-        return;
+    if g.phase != GamePhase::Waiting && !g.player_map.contains_key(&username) {
+      let _ = sender
+        .send(Message::text(
+          serde_json::to_string(
+            &serde_json::json!({"type": "error", "data": "游戏已开始，禁止加入．"}),
+          )
+          .unwrap(),
+        ))
+        .await;
+      return;
+    }
+    if !g.player_map.contains_key(&username) {
+      g.players.push(username.clone());
+      g.player_map.insert(
+        username.clone(),
+        Player {
+          id: username.clone(),
+          color_hue: 0,
+          status: PlayerStatus::Waiting,
+          obtained_indices: Vec::new(),
+          answer: None,
+          is_online: true,
+          last_seen: Instant::now(),
+        },
+      );
+      let _ = state
+        .tx
+        .send(InternalMsg::Log(format!("{} 加入了游戏", username)));
+    } else {
+      if let Some(p) = g.player_map.get_mut(&username) {
+        p.is_online = true;
       }
-
-      if !g.player_map.contains_key(&username) {
-        g.players.push(username.clone());
-        g.player_map.insert(
-          username.clone(),
-          Player {
-            id: username.clone(),
-            color_hue: 0,
-            status: PlayerStatus::Waiting,
-            obtained_indices: Vec::new(),
-            answer: None,
-            is_online: true,
-            last_seen: Instant::now(),
-          },
-        );
-        let _ = state
-          .tx
-          .send(InternalMsg::Log(format!("{} 加入了游戏", username)));
-      } else {
-        if let Some(p) = g.player_map.get_mut(&username) {
-          p.is_online = true;
-        }
-        let _ = state
-          .tx
-          .send(InternalMsg::Log(format!("{} 重连成功", username)));
-      }
+      let _ = state
+        .tx
+        .send(InternalMsg::Log(format!("{} 重连成功", username)));
     }
   }
 
-  // 发送初始状态
   let initial_view = {
     let g = state.game.read().await;
     build_client_view(&g, &user)
   };
   let _ = sender
     .send(Message::text(
-      serde_json::to_string(&serde_json::json!({
-          "type": "update", "data": initial_view
-      }))
-      .unwrap(),
+      serde_json::to_string(&serde_json::json!({"type": "update", "data": initial_view})).unwrap(),
     ))
     .await;
 
@@ -618,21 +612,12 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>, user: Option<Str
               let mut g = state.game.write().await;
 
               match msg {
-                ClientMsg::Heartbeat => {
-                  if let Some(p) = g.player_map.get_mut(uname) {
-                    p.last_seen = Instant::now();
-                  }
-                },
+                ClientMsg::Heartbeat => { if let Some(p) = g.player_map.get_mut(uname) { p.last_seen = Instant::now(); } },
                 ClientMsg::Action { action } => {
-                  if g.phase == GamePhase::Picking &&
-                  g.players.get(g.current_turn_idx).map(|s| s.as_str()) == Some(uname) {
-                    if action == "take" {
-                      perform_take_action(&mut g, &state.tx);
-                    } else if action == "stop" {
-                      if let Some(p) = g.player_map.get_mut(uname) {
-                        p.status = PlayerStatus::Stopped;
-                        let _ = state.tx.send(InternalMsg::Log(format!("[操作] {} 停止取字", uname)));
-                      }
+                  if g.phase == GamePhase::Picking && g.players.get(g.current_turn_idx).map(|s| s.as_str()) == Some(uname) {
+                    if action == "take" { perform_take_action(&mut g, &state.tx); }
+                    else if action == "stop" {
+                      if let Some(p) = g.player_map.get_mut(uname) { p.status = PlayerStatus::Stopped; let _ = state.tx.send(InternalMsg::Log(format!("[操作] {} 停止取字", uname))); }
                       advance_turn(&mut g, &state.tx);
                     }
                   }
@@ -662,15 +647,11 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>, user: Option<Str
           InternalMsg::StateUpdated => {
             let g = state.game.read().await;
             let view = build_client_view(&g, &user);
-            let json = serde_json::to_string(&serde_json::json!({
-              "type": "update", "data": view
-            })).unwrap();
+            let json = serde_json::to_string(&serde_json::json!({"type": "update", "data": view})).unwrap();
             if sender.send(Message::text(json)).await.is_err() { break; }
           },
           InternalMsg::Log(l) => {
-            let json = serde_json::to_string(&serde_json::json!({
-              "type": "log", "data": format!("{} [系统] {}", Local::now().format("%H:%M:%S"), l)
-            })).unwrap();
+            let json = serde_json::to_string(&serde_json::json!({"type": "log", "data": format!("{} [系统] {}", Local::now().format("%H:%M:%S"), l)})).unwrap();
             if sender.send(Message::text(json)).await.is_err() { break; }
           }
         }
@@ -747,6 +728,7 @@ fn build_client_view(g: &GameState, user: &Option<String>) -> ClientView {
     }
   }
 
+  // 此处遍历题目全长，确保初始显示正确数量的黑框
   for i in 0..problem_len {
     let owner_id = index_owners.get(&i);
     let mut color = None;
@@ -755,6 +737,8 @@ fn build_client_view(g: &GameState, user: &Option<String>) -> ClientView {
     if let Some(oid) = owner_id {
       if let Some(p) = g.player_map.get(oid) {
         color = Some(p.color_hue);
+        // 如果是观战者(user=None)，is_mine 恒为 false
+        // 只有在结算阶段，或者该字属于当前用户时，才填充字符内容
         let is_mine = user.as_ref() == Some(oid);
         if g.phase == GamePhase::Settlement || is_mine {
           char_content = Some(g.problem_text[i]);
@@ -797,10 +781,7 @@ fn render_html(username: &str, is_watch: bool) -> String {
       <head>
         <meta charset="UTF-8" />
         <title>Quiz 接龙</title>
-        <link
-          rel="stylesheet"
-          href="https://csstools.github.io/sanitize.css/13.0.0/sanitize.css"
-        />
+        <link rel="stylesheet" href="https://csstools.github.io/sanitize.css/13.0.0/sanitize.css" />
         <style>
           :root {{ --bg: #f4f4f4; --text: #333; --cell-size: 40px; }}
           body {{ font-family: monospace; background: var(--bg); color: var(--text); margin: 0; padding: 0; height: 100vh; display: flex; overflow: hidden; }}
@@ -827,14 +808,7 @@ fn render_html(username: &str, is_watch: bool) -> String {
         <div class="main">
           <div class="header" id="hint-box">...</div>
           <div class="content">
-            <div
-              style="
-                width: 100%;
-                display: flex;
-                flex-direction: column;
-                align-items: center;
-              "
-            >
+            <div style="width: 100%; display: flex; flex-direction: column; align-items: center;">
               <div class="grid" id="grid-box"></div>
               <div id="result-area"></div>
             </div>
@@ -849,10 +823,13 @@ fn render_html(username: &str, is_watch: bool) -> String {
           const username = "{}";
           let socket;
           let gameState = null;
+          let timerInterval = null;
 
           function connect() {{
               const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-              socket = new WebSocket(`${{protocol}}//${{window.location.host}}/ws`);
+              // 修复：观战模式强制添加 spectate 参数，避免服务端误读浏览器缓存的身份认证信息
+              const qs = isWatch ? '?spectate=true' : '';
+              socket = new WebSocket(`${{protocol}}//${{window.location.host}}/ws${{qs}}`);
               socket.onopen = () => {{
                   log("系统", "已连接服务器");
                   document.getElementById('status-text').innerText = "已连接";
@@ -876,6 +853,7 @@ fn render_html(username: &str, is_watch: bool) -> String {
           }}
           function sendAction(act) {{ socket.send(JSON.stringify({{ type: "Action", data: {{ action: act }} }})); }}
           function sendAnswer() {{ socket.send(JSON.stringify({{ type: "Answer", data: {{ content: document.getElementById('ans-input').value }} }})); }}
+
           function render() {{
               document.getElementById('hint-box').innerText = gameState.phase === 'Settlement' ?
                   "比赛结束 - 正确答案: " + gameState.correct_answer : (gameState.hint || "等待开始...");
@@ -898,17 +876,30 @@ fn render_html(username: &str, is_watch: bool) -> String {
                   div.className = 'cell';
                   if (cell.owner_color_hue !== null) div.style.backgroundColor = `hsl(${{cell.owner_color_hue}}, 70%, 80%)`;
                   if (cell.char_content) div.innerText = cell.char_content;
+                  // 未被占用的格子，CSS 默认背景为黑色，满足显示需求
                   grid.appendChild(div);
               }});
 
               const ctrl = document.getElementById('control-box');
+              if (timerInterval) {{ clearInterval(timerInterval); timerInterval = null; }}
+
               if (isWatch) {{ ctrl.innerHTML = '<div>观战模式</div>'; return; }}
               const me = gameState.players.find(p => p.is_me);
               if (!me) {{ ctrl.innerHTML = ''; return; }}
 
               if (gameState.phase === 'Picking') {{
                   if (me.status === 'Picking') {{
-                      ctrl.innerHTML = `<button onclick="sendAction('take')">要一个字 (${{Math.ceil((gameState.turn_deadline_ms || 0)/1000)}}s)</button><button onclick="sendAction('stop')" style="background:#fdd">停止</button>`;
+                      const deadline = Date.now() + (gameState.turn_deadline_ms || 0);
+                      ctrl.innerHTML = `<button id="btn-take" onclick="sendAction('take')">要一个字</button><button onclick="sendAction('stop')" style="background:#fdd">停止</button>`;
+
+                      const btn = document.getElementById('btn-take');
+                      const updateTimer = () => {{
+                          const rem = Math.max(0, (deadline - Date.now()) / 1000);
+                          btn.innerText = `要一个字 (${{rem.toFixed(2)}}s)`;
+                          if (rem <= 0 && timerInterval) clearInterval(timerInterval);
+                      }};
+                      updateTimer();
+                      timerInterval = setInterval(updateTimer, 30);
                   }} else ctrl.innerHTML = `<div>等待他人操作...</div>`;
               }} else if (gameState.phase === 'Answering') {{
                   if (me.status === 'Submitted') ctrl.innerHTML = `<div>答案已提交</div>`;
