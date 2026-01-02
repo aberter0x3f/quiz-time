@@ -244,7 +244,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>, user: Option<Str
     } else {
       let _ = state.tx.send(InternalMsg::Log(LogEntry {
         who: "System".to_string(),
-        text: format!("{} disconnected（reserved for 30s）.", username),
+        text: format!("{} disconnected (reserved for 30s) .", username),
         time: Local::now().format("%H:%M:%S").to_string(),
       }));
       let _ = state.tx.send(InternalMsg::StateUpdated);

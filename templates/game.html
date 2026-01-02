@@ -1,46 +1,36 @@
 <!doctype html>
 <html lang="en">
   <head>
-    <meta charset="UTF-8" />
-    <meta
-      name="viewport"
-      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"
-    />
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Quiz Chain</title>
+    <script src="https://unpkg.com/jquery@3.7.1/dist/jquery.min.js"></script>
     <link
       rel="stylesheet"
-      href="https://unpkg.com/sanitize.css@13.0.0/sanitize.css"
+      type="text/css"
+      href="https://unpkg.com/fomantic-ui@2.9.4/dist/semantic.min.css"
     />
+    <script src="https://unpkg.com/fomantic-ui@2.9.4/dist/semantic.min.js"></script>
     <style>
-      :root {
-        --bg: #f4f4f4;
-        --text: #333;
-        --cell-size: 40px;
-      }
       body {
-        font-family: monospace;
-        background: var(--bg);
-        color: var(--text);
-        margin: 0;
-        padding: 0;
+        background-color: #f7f7f7;
         height: 100vh;
+        margin: 0;
         display: flex;
-        overflow: hidden;
+        flex-direction: row;
       }
-      * {
-        border-radius: 0 !important;
-        box-sizing: border-box;
-      }
-      .sidebar {
-        width: 250px;
-        background: #e0e0e0;
-        border-right: 2px solid #000;
+      .app-container {
         display: flex;
-        flex-direction: column;
+        width: 100%;
+        height: 100vh;
+      }
+      .sidebar-panel {
+        width: 260px;
         overflow-y: auto;
-        flex-shrink: 0;
+        border-right: 1px solid rgba(34, 36, 38, 0.15);
+        background: #fff;
       }
-      .main {
+      .main-panel {
         flex: 1;
         display: flex;
         flex-direction: column;
@@ -48,164 +38,115 @@
       }
       .log-panel {
         width: 300px;
-        background: #fff;
-        border-left: 2px solid #000;
         overflow-y: auto;
-        font-size: 12px;
-        padding: 10px;
-        flex-shrink: 0;
+        border-left: 1px solid rgba(34, 36, 38, 0.15);
+        background: #fff;
+        padding: 1rem;
       }
-      @media (max-width: 800px) {
+      .content-scroll {
+        flex: 1;
+        overflow-y: auto;
+        padding: 2rem;
+      }
+      .char-grid {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 5px;
+      }
+      .char-cell {
+        width: 40px;
+        height: 40px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 1.2rem;
+        font-weight: bold;
+        border: 1px solid rgba(0, 0, 0, 0.1);
+      }
+      /* 移动端适配修改 */
+      @media (max-width: 900px) {
         body {
           flex-direction: column;
           height: auto;
-          overflow-y: auto;
+          padding-bottom: 90px;
         }
-        .sidebar {
-          width: 100%;
-          height: 180px;
-          border-right: none;
-          border-top: 2px solid #000;
-          order: 2;
+        .app-container {
+          flex-direction: column;
+          height: auto;
         }
-        .main {
-          width: 100%;
-          min-height: 60vh;
-          order: 1;
-        }
+        .sidebar-panel,
         .log-panel {
           width: 100%;
-          height: 200px;
-          border-left: none;
-          border-top: 2px solid #000;
-          order: 3;
+          max-height: 250px;
+          border-right: none;
+          border-bottom: 1px solid rgba(34, 36, 38, 0.15);
         }
-      }
-      .header {
-        height: 60px;
-        border-bottom: 2px solid #000;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 1.1em;
-        font-weight: bold;
-        background: #fff;
-        padding: 0 10px;
-      }
-      .content {
-        flex: 1;
-        padding: 20px;
-        overflow-y: auto;
-        display: flex;
-        justify-content: center;
-        align-items: flex-start;
-      }
-      .controls {
-        min-height: 80px;
-        height: auto;
-        border-top: 2px solid #000;
-        background: #ddd;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        gap: 10px;
-        padding: 10px;
-        flex-wrap: wrap;
-      }
-      .grid {
-        display: grid;
-        grid-template-columns: repeat(auto-fill, var(--cell-size));
-        gap: 4px;
-        width: 100%;
-        max-width: 800px;
-        padding: 10px;
-        background: transparent;
-      }
-      .cell {
-        width: var(--cell-size);
-        height: var(--cell-size);
-        background: #222;
-        border: 1px solid #555;
-        color: #000;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 20px;
-        font-weight: bold;
-      }
-      .player-item {
-        padding: 10px;
-        border-bottom: 1px solid #999;
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        font-size: 14px;
-      }
-      .player-status {
-        font-size: 10px;
-        padding: 2px 4px;
-        background: #333;
-        color: #fff;
-      }
-      button {
-        padding: 12px 20px;
-        border: 2px solid #000;
-        background: #fff;
-        cursor: pointer;
-        font-weight: bold;
-        font-size: 16px;
-        min-width: 80px;
-      }
-      button:hover {
-        background: #eee;
-      }
-      button:active {
-        background: #ccc;
-      }
-      input[type="text"] {
-        padding: 10px;
-        border: 2px solid #000;
-        width: 100%;
-        max-width: 300px;
-        font-size: 16px;
-      }
-      .active-turn {
-        border-left: 6px solid red;
-        background: #fff0f0;
-      }
-      #result-area {
-        display: none;
-        padding: 20px;
-        background: #fff;
-        border: 2px solid #000;
-        margin-top: 20px;
-        width: 100%;
-        max-width: 800px;
+        .log-panel {
+          border-left: none;
+          border-top: 1px solid rgba(34, 36, 38, 0.15);
+          background: #fcfcfc;
+        }
+        .main-panel {
+          height: auto;
+          overflow: visible;
+        }
+        .content-scroll {
+          overflow: visible;
+          height: auto;
+          padding: 1rem;
+        }
+        #control-box {
+          position: fixed;
+          top: auto;
+          bottom: 0;
+          left: 0;
+          width: 100%;
+          height: auto;
+          z-index: 1000;
+          margin: 0;
+          border-radius: 0;
+          border: none;
+          border-top: 1px solid rgba(34, 36, 38, 0.15);
+        }
       }
     </style>
   </head>
   <body>
-    <div class="sidebar" id="player-list"></div>
-    <div class="main">
-      <div class="header" id="hint-box">...</div>
-      <div class="content">
-        <div
-          style="
-            width: 100%;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-          "
-        >
-          <div class="grid" id="grid-box"></div>
-          <div id="result-area"></div>
+    <div class="app-container">
+      <!-- 玩家列表侧边栏 -->
+      <div class="sidebar-panel">
+        <div class="ui fluid vertical menu" id="player-list">
+          <div class="header item">Players</div>
         </div>
       </div>
-      <div class="controls" id="control-box">
-        <div id="status-text">Connecting...</div>
+
+      <!-- 主游戏区域 -->
+      <div class="main-panel">
+        <div class="ui top attached segment">
+          <h3 class="ui header" id="hint-box">Loading...</h3>
+        </div>
+
+        <div class="ui attached segment content-scroll">
+          <div class="char-grid" id="grid-box"></div>
+
+          <div id="result-area" style="margin-top: 2rem;">
+            <!-- 结算结果 -->
+          </div>
+        </div>
+
+        <div class="ui bottom attached segment center aligned" id="control-box">
+          <div class="ui active inline loader" id="status-loader"></div>
+          <span id="status-text">Connecting...</span>
+        </div>
+      </div>
+
+      <!-- 日志面板 -->
+      <div class="log-panel">
+        <h4 class="ui dividing header">System Logs</h4>
+        <div class="ui small feed" id="log-box"></div>
       </div>
     </div>
-    <div class="log-panel" id="log-box"></div>
+
     <script>
       const isSpectate = "{{ is_spectate }}".toLowerCase() === "true";
       const username = "{{ username }}";
@@ -218,8 +159,11 @@
         const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
         const qs = isSpectate ? "?spectate=true" : "";
         socket = new WebSocket(`${protocol}//${window.location.host}/ws${qs}`);
+
         socket.onopen = () => {
+          document.getElementById("status-loader").classList.remove("active");
           document.getElementById("status-text").innerText = "Connected";
+
           setInterval(
             () =>
               socket.send(JSON.stringify({ type: "Heartbeat", data: null })),
@@ -227,6 +171,7 @@
           );
           if (!timerInterval) timerInterval = setInterval(updateUiTimer, 100);
         };
+
         socket.onmessage = (event) => {
           const msg = JSON.parse(event.data);
           if (msg.type === "update") {
@@ -243,29 +188,39 @@
             alert(msg.data);
           }
         };
-        socket.onclose = () => setTimeout(connect, 3000);
+
+        socket.onclose = () => {
+          document.getElementById("status-loader").classList.add("active");
+          document.getElementById("status-text").innerText =
+            "Disconnected, retrying...";
+          setTimeout(connect, 3000);
+        };
       }
 
       function log(who, text, time) {
         const box = document.getElementById("log-box");
-        const div = document.createElement("div");
-        div.style.marginBottom = "4px";
-        div.style.wordBreak = "break-all";
-        div.innerText = `${time} [${who}] ${text}`;
-        box.appendChild(div);
-        box.scrollTop = box.scrollHeight;
+        const event = document.createElement("div");
+        event.className = "event";
+        event.innerHTML = `
+          <div class="content">
+            <div class="summary">
+              <a class="user">${who}</a> ${text}
+              <div class="date">${time}</div>
+            </div>
+          </div>
+        `;
+        box.appendChild(event);
+        const panel = document.querySelector(".log-panel");
+        panel.scrollTop = panel.scrollHeight;
       }
 
       function sendAction(act) {
         socket.send(JSON.stringify({ type: "Action", data: { action: act } }));
       }
+
       function sendAnswer() {
-        socket.send(
-          JSON.stringify({
-            type: "Answer",
-            data: { content: document.getElementById("ans-input").value },
-          }),
-        );
+        const val = document.getElementById("ans-input").value;
+        socket.send(JSON.stringify({ type: "Answer", data: { content: val } }));
       }
 
       function updateUiTimer() {
@@ -279,96 +234,155 @@
       }
 
       function render() {
-        if (
-          gameState.turn_deadline_ms !== null &&
-          gameState.turn_deadline_ms !== undefined
-        )
+        // 同步服务器截止时间到本地偏移
+        if (gameState.turn_deadline_ms != null)
           gameState._localTargetTime = Date.now() + gameState.turn_deadline_ms;
-        else if (
-          gameState.answer_deadline_ms !== null &&
-          gameState.answer_deadline_ms !== undefined
-        )
+        else if (gameState.answer_deadline_ms != null)
           gameState._localTargetTime =
             Date.now() + gameState.answer_deadline_ms;
         else gameState._localTargetTime = null;
 
+        // 渲染顶部标题
         const totalChars = gameState.grid.length;
-        const hintText =
-          gameState.phase === "Settlement"
-            ? "Game Over"
-            : gameState.hint || "Waiting...";
+        const hintText = gameState.hint || "Waiting...";
         document.getElementById("hint-box").innerText =
           `${hintText} (${totalChars} chars)`;
 
+        // 渲染玩家列表
         const pList = document.getElementById("player-list");
-        pList.innerHTML = "";
+        pList.innerHTML = '<div class="header item">Players</div>';
         gameState.players.forEach((p) => {
-          const div = document.createElement("div");
-          div.className = "player-item";
-          div.style.backgroundColor = `hsl(${p.color_hue}, 70%, 90%)`;
-          if (p.status === "Picking") div.classList.add("active-turn");
-          div.innerHTML = `<div><strong>${p.id}</strong> ${p.is_me ? "(Me)" : ""}<br><small>Count: ${p.obtained_count}</small></div><div class="player-status">${p.is_online ? p.status : "OFFLINE"}</div>`;
-          pList.appendChild(div);
+          const item = document.createElement("div");
+          item.className = "item";
+          item.style.display = "flex";
+          item.style.alignItems = "center";
+
+          if (p.status === "Picking") item.classList.add("active", "teal");
+
+          const dotColor = p.is_online ? "green" : "grey";
+          const nameColor = `hsl(${p.color_hue}, 70%, 35%)`;
+
+          // 状态点 | 名字 (Me) | (伸缩空间) | 字数
+          item.innerHTML = `
+            <div class="ui mini ${dotColor} empty circular label" style="margin: 0 0.8em 0 0;"></div>
+            <div style="flex: 1; display: flex; flex-direction: column;">
+              <div style="display: flex; align-items: center;">
+                <span style="color: ${nameColor}; font-weight: bold;">${p.id}</span>
+                ${p.is_me ? '<span class="ui mini blue label" style="margin-left: 0.5em; padding: 0.2em 0.5em;">Me</span>' : ""}
+              </div>
+              <div class="description" style="font-size: 0.85em; color: rgba(0,0,0,0.5);">${p.status}</div>
+            </div>
+            <div class="ui label" style="margin-left: 1em;">
+              <i class="font icon"></i>${p.obtained_count}
+            </div>
+          `;
+          pList.appendChild(item);
         });
 
+        // 渲染网格
         const grid = document.getElementById("grid-box");
         grid.innerHTML = "";
         gameState.grid.forEach((cell) => {
           const div = document.createElement("div");
-          div.className = "cell";
-          if (cell.owner_color_hue !== null)
-            div.style.backgroundColor = `hsl(${cell.owner_color_hue}, 70%, 80%)`;
+          div.className = "char-cell ui";
+          if (cell.owner_color_hue !== null) {
+            div.style.backgroundColor = `hsl(${cell.owner_color_hue}, 70%, 85%)`;
+          } else {
+            div.style.backgroundColor = "#eee";
+          }
           if (cell.char_content) div.innerText = cell.char_content;
           grid.appendChild(div);
         });
 
+        // 渲染结算区域
         const resArea = document.getElementById("result-area");
         if (gameState.phase === "Settlement") {
           resArea.style.display = "block";
-          let html = `<h3>Answer: ${gameState.correct_answer}</h3><h4>Full Text:</h4><p style="word-break:break-all">${gameState.full_problem}</p><h4>Submissions:</h4><ul>`;
+          let html = `
+            <div class="ui segment">
+              <h2 class="ui header">Result</h2>
+              <div class="ui message info"><strong>Answer:</strong> ${gameState.correct_answer}</div>
+              <h4 class="ui header">Full Problem</h4>
+              <p style="word-break: break-all">${gameState.full_problem}</p>
+              <h4 class="ui header">Player Submissions</h4>
+              <div class="ui list">
+          `;
           gameState.players.forEach((p) => {
-            let color = p.answer === gameState.correct_answer ? "green" : "red";
-            let showAns =
-              p.answer === null || p.answer === "" ? "(Empty)" : p.answer;
-            html += `<li style="color:${color}">${p.id}: ${showAns}</li>`;
+            const isCorrect = p.answer === gameState.correct_answer;
+            const icon = isCorrect ? "check green" : "times red";
+            const ansText = p.answer || "(No Answer)";
+            html += `
+              <div class="item">
+                <i class="${icon} icon"></i>
+                <div class="content">
+                  <strong>${p.id}</strong>: ${ansText}
+                </div>
+              </div>
+            `;
           });
-          resArea.innerHTML = html + "</ul>";
-        } else resArea.style.display = "none";
+          resArea.innerHTML = html + "</div></div>";
+        } else {
+          resArea.style.display = "none";
+        }
 
+        // 渲染控制区域
         const ctrl = document.getElementById("control-box");
         if (isSpectate) {
-          ctrl.innerHTML = "<div>Spectating...</div>";
+          ctrl.innerHTML = '<div class="ui message">Spectating Mode</div>';
           return;
         }
         const me = gameState.players.find((p) => p.is_me);
         if (!me) {
-          ctrl.innerHTML = "";
+          ctrl.innerHTML = '<div class="ui message">Joining...</div>';
           return;
         }
 
         if (gameState.phase === "Picking") {
           if (me.status === "Picking") {
-            ctrl.innerHTML = `<button onclick="sendAction('take')">Take Char (<span class="timer-text">--</span>)</button>
-                                    <button onclick="sendAction('stop')" style="background:#fdd">Stop</button>`;
-          } else ctrl.innerHTML = `<div>Waiting for others...</div>`;
+            ctrl.innerHTML = `
+              <div class="ui buttons fluid">
+                <button class="ui primary button" onclick="sendAction('take')">
+                  <i class="hand pointer icon"></i> Take (<span class="timer-text">--</span>)
+                </button>
+                <div class="or"></div>
+                <button class="ui negative button" onclick="sendAction('stop')">Stop</button>
+              </div>
+            `;
+          } else {
+            ctrl.innerHTML =
+              '<div class="ui message">Wait for your turn...</div>';
+          }
         } else if (gameState.phase === "Answering") {
-          if (me.status === "Submitted")
-            ctrl.innerHTML = `<div>Submitted, waiting...</div>`;
-          else {
+          if (me.status === "Submitted") {
+            ctrl.innerHTML =
+              '<div class="ui message success">Submission received. Waiting for others...</div>';
+          } else {
+            // 保留输入框中的内容
             const oldInput = document.getElementById("ans-input");
             const draft = oldInput ? oldInput.value : me.answer || "";
-            ctrl.innerHTML = `<input type="text" id="ans-input" placeholder="Type answer...">
-                                    <button onclick="sendAnswer()">Submit (<span class="timer-text">--</span>)</button>`;
-            const newInput = document.getElementById("ans-input");
-            if (newInput) newInput.value = draft;
+            ctrl.innerHTML = `
+              <div class="ui action input fluid">
+                <input type="text" id="ans-input" placeholder="Your answer...">
+                <button class="ui primary button" onclick="sendAnswer()">
+                  Submit (<span class="timer-text">--</span>)
+                </button>
+              </div>
+            `;
+            document.getElementById("ans-input").value = draft;
           }
-        } else if (gameState.phase === "Settlement")
-          ctrl.innerHTML = `<div>Game Finished</div>`;
-        else ctrl.innerHTML = `<div>Waiting for admin /start</div>`;
+        } else if (gameState.phase === "Settlement") {
+          ctrl.innerHTML =
+            '<div class="ui message">The game has concluded．</div>';
+        } else {
+          ctrl.innerHTML =
+            '<div class="ui message info">Waiting for the admin to start the game．</div>';
+        }
 
         updateUiTimer();
       }
-      connect();
+
+      // 页面加载完成后启动连接
+      $(document).ready(connect);
     </script>
   </body>
 </html>

@@ -101,7 +101,7 @@ pub async fn start_game(game: Arc<RwLock<GameState>>, tx: broadcast::Sender<Inte
     }
   }
 
-  send_sys_log(&tx, "System", "Game started！Order shuffled.".to_string());
+  send_sys_log(&tx, "System", "Game started. Order shuffled.".to_string());
   let _ = tx.send(InternalMsg::StateUpdated);
 }
 
@@ -189,7 +189,6 @@ pub fn perform_take_action(g: &mut GameState, tx: &broadcast::Sender<InternalMsg
 
   if let Some(p) = g.player_map.get_mut(&current_id) {
     p.obtained_indices.push(g.cursor);
-    send_sys_log(tx, "Action", format!("{} took a character.", current_id));
   }
   g.cursor += 1;
 
