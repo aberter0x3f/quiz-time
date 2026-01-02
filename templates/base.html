@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Quiz Chain</title>
+    <title>{% block title %}Quiz Game{% endblock %}</title>
     <script src="https://unpkg.com/jquery@3.7.1/dist/jquery.min.js"></script>
     <link
       rel="stylesheet"
@@ -63,7 +63,7 @@
         font-weight: bold;
         border: 1px solid rgba(0, 0, 0, 0.1);
       }
-      /* 移动端适配修改 */
+      /* 移动端适配 */
       @media (max-width: 900px) {
         body {
           flex-direction: column;
@@ -110,38 +110,29 @@
         }
       }
     </style>
+    {% block extra_styles %}{% endblock %}
   </head>
   <body>
     <div class="app-container">
-      <!-- 玩家列表侧边栏 -->
+      <!-- 玩家列表 -->
       <div class="sidebar-panel">
         <div class="ui fluid vertical menu" id="player-list">
           <div class="header item">Players</div>
         </div>
       </div>
 
-      <!-- 主游戏区域 -->
+      <!-- 主区域 -->
       <div class="main-panel">
         <div
           class="ui top attached segment"
           style="display: flex; justify-content: space-between; align-items: center;"
         >
           <h3 class="ui header" id="hint-box" style="margin:0;">Loading...</h3>
-          <button
-            class="ui mini icon button basic"
-            onclick="copyContent()"
-            title="Copy content to clipboard"
-          >
-            <i class="copy outline icon"></i> Copy Content
-          </button>
+          <div id="top-buttons">{% block top_buttons %}{% endblock %}</div>
         </div>
 
         <div class="ui attached segment content-scroll">
-          <div class="char-grid" id="grid-box"></div>
-
-          <div id="result-area" style="margin-top: 2rem;">
-            <!-- 结算结果 -->
-          </div>
+          {% block content %}{% endblock %}
         </div>
 
         <div class="ui bottom attached segment center aligned" id="control-box">
@@ -150,7 +141,7 @@
         </div>
       </div>
 
-      <!-- 日志面板 -->
+      <!-- 日志 -->
       <div class="log-panel">
         <h4 class="ui dividing header">Logs</h4>
         <div class="ui small feed" id="log-box"></div>
@@ -180,7 +171,6 @@
         socket.onopen = () => {
           document.getElementById("status-loader").classList.remove("active");
           document.getElementById("status-text").innerText = "Connected";
-
           setInterval(
             () =>
               socket.send(JSON.stringify({ type: "Heartbeat", data: null })),
@@ -198,9 +188,16 @@
             }
             currentGameId = msg.data.game_id;
             gameState = msg.data;
-            render();
+            renderBase();
+            // 如果子模板定义了 renderGame，则调用
+            if (typeof renderGame === "function") renderGame(gameState);
           } else if (msg.type === "log") {
             log(msg.data.who, msg.data.text, msg.data.time);
+          } else if (msg.type === "toast") {
+            $("body").toast({
+              class: msg.data.kind === "error" ? "error" : "info",
+              message: msg.data.msg,
+            });
           } else if (msg.type === "error") {
             alert(msg.data);
           }
@@ -218,14 +215,7 @@
         const box = document.getElementById("log-box");
         const event = document.createElement("div");
         event.className = "event";
-        event.innerHTML = `
-          <div class="content">
-            <div class="summary">
-              <a class="user">${who}</a> ${text}
-              <div class="date">${time}</div>
-            </div>
-          </div>
-        `;
+        event.innerHTML = `<div class="content"><div class="summary"><a class="user">${who}</a> ${text}<div class="date">${time}</div></div></div>`;
         box.appendChild(event);
         const panel = document.querySelector(".log-panel");
         panel.scrollTop = panel.scrollHeight;
@@ -240,29 +230,6 @@
         socket.send(JSON.stringify({ type: "Answer", data: { content: val } }));
       }
 
-      function copyContent() {
-        if (!gameState || !gameState.grid) return;
-        // 拼接当前看到的所有字符
-        const text = gameState.grid
-          .map((cell) => (cell.char_content ? cell.char_content : ""))
-          .join("");
-
-        navigator.clipboard.writeText(text).then(
-          () => {
-            $("body").toast({
-              class: "success",
-              message: `Copied ${text.length} characters.`,
-            });
-          },
-          () => {
-            $("body").toast({
-              class: "error",
-              message: "Failed to copy.",
-            });
-          },
-        );
-      }
-
       function updateUiTimer() {
         if (!gameState || !gameState._localTargetTime) return;
         const rem = Math.max(
@@ -273,26 +240,20 @@
         els.forEach((el) => (el.innerText = rem.toFixed(1) + "s"));
       }
 
-      function render() {
-        // 同步服务器截止时间到本地偏移
-        if (gameState.turn_deadline_ms != null)
-          gameState._localTargetTime = Date.now() + gameState.turn_deadline_ms;
-        else if (gameState.answer_deadline_ms != null)
-          gameState._localTargetTime =
-            Date.now() + gameState.answer_deadline_ms;
+      function renderBase() {
+        // 同步时间
+        if (gameState.deadline_ms != null)
+          gameState._localTargetTime = Date.now() + gameState.deadline_ms;
         else gameState._localTargetTime = null;
 
-        // 渲染顶部标题
-        const totalChars = gameState.grid.length;
-        const hintText = gameState.hint || "Waiting...";
+        // 标题
         let suffix = "";
         if (gameState.is_super) suffix += " [SUPER]";
         if (isSpectate) suffix += " [SPECTATOR]";
-
         document.getElementById("hint-box").innerText =
-          `${hintText} (${totalChars} chars)${suffix}`;
+          `${gameState.hint}${suffix}`;
 
-        // 渲染玩家列表
+        // 玩家列表
         const pList = document.getElementById("player-list");
         pList.innerHTML = '<div class="header item">Players</div>';
         gameState.players.forEach((p) => {
@@ -300,15 +261,16 @@
           item.className = "item";
           item.style.display = "flex";
           item.style.alignItems = "center";
-
-          if (p.status === "Picking") item.classList.add("active", "teal");
+          if (p.is_active_turn) item.classList.add("active", "teal");
 
           const dotColor = p.is_online ? "green" : "grey";
           const nameColor = `hsl(${p.color_hue}, 70%, 35%)`;
-
           let extraInfo = "";
+          if (p.extra_info)
+            extraInfo = `<div style="font-size: 0.8em; color: #666; margin-top:2px;">${p.extra_info}</div>`;
+          // 超级观察者可见答案
           if (gameState.is_super && p.answer) {
-            extraInfo = `<div style="font-size: 0.8em; color: #d01919; margin-top:2px;">Ans: ${p.answer}</div>`;
+            extraInfo += `<div style="font-size: 0.8em; color: #d01919;">Ans: ${p.answer}</div>`;
           }
 
           item.innerHTML = `
@@ -321,138 +283,34 @@
               <div class="description" style="font-size: 0.85em; color: rgba(0,0,0,0.5);">${p.status}</div>
               ${extraInfo}
             </div>
-            <div class="ui label" style="margin-left: 1em;">
-              <i class="font icon"></i>${p.obtained_count}
-            </div>
+            ${p.score_display ? `<div class="ui label" style="margin-left: 1em;">${p.score_display}</div>` : ""}
           `;
           pList.appendChild(item);
         });
 
-        // 渲染网格
-        const grid = document.getElementById("grid-box");
-        grid.innerHTML = "";
-        gameState.grid.forEach((cell) => {
-          const div = document.createElement("div");
-          div.className = "char-cell ui";
-          if (cell.owner_color_hue !== null) {
-            div.style.backgroundColor = `hsl(${cell.owner_color_hue}, 70%, 85%)`;
-          } else {
-            div.style.backgroundColor = "#eee";
-          }
-          if (cell.char_content) div.innerText = cell.char_content;
-          grid.appendChild(div);
-        });
-
-        // 渲染结算区域
-        const resArea = document.getElementById("result-area");
-        if (gameState.phase === "Settlement") {
-          resArea.style.display = "block";
-          let html = `
-            <div class="ui segment">
-              <h2 class="ui header">Result</h2>
-              <div class="ui message info"><strong>Correct Answer:</strong> ${gameState.correct_answer}</div>
-              <h4 class="ui header">Player Submissions</h4>
-              <div class="ui list">
-          `;
-          gameState.players.forEach((p) => {
-            const isCorrect = p.answer === gameState.correct_answer;
-            const icon = isCorrect ? "check green" : "times red";
-            const ansText = p.answer || "(No Answer)";
-            html += `
-              <div class="item">
-                <i class="${icon} icon"></i>
-                <div class="content">
-                  <strong>${p.id}</strong>: ${ansText}
-                </div>
-              </div>
-            `;
-          });
-          resArea.innerHTML = html + "</div></div>";
-        } else if (gameState.is_super) {
-          resArea.style.display = "block";
-          resArea.innerHTML = `
-             <div class="ui segment red">
-               <h4 class="ui header">Super Spectator Info</h4>
-               <p><strong>Correct Answer:</strong> ${gameState.correct_answer || "???"}</p>
-             </div>
-            `;
-        } else {
-          resArea.style.display = "none";
-        }
-
-        // 渲染控制区域
+        // 底部控制区逻辑
         const ctrl = document.getElementById("control-box");
         if (isSpectate) {
-          if (isSuper) {
-            ctrl.innerHTML =
-              '<div class="ui message red">Super Spectating Mode</div>';
-          } else {
-            ctrl.innerHTML = '<div class="ui message">Spectating Mode</div>';
-          }
+          ctrl.innerHTML = isSuper
+            ? '<div class="ui message red">Super Spectating Mode</div>'
+            : '<div class="ui message">Spectating Mode</div>';
           return;
         }
+
         const me = gameState.players.find((p) => p.is_me);
         if (!me) {
           ctrl.innerHTML = '<div class="ui message">Joining...</div>';
           return;
         }
 
-        // 如果已经提交
-        if (me.status === "Submitted") {
-          ctrl.innerHTML =
-            '<div class="ui message success">Submission received.</div>';
-          return;
-        }
-
-        // 如果处于答题阶段，或者我虽然在 Picking 阶段但已经 Stopped
-        if (
-          gameState.phase === "Answering" ||
-          (gameState.phase === "Picking" && me.status === "Stopped")
-        ) {
-          // 保留输入框中的内容
-          const oldInput = document.getElementById("ans-input");
-          const draft = oldInput ? oldInput.value : me.answer || "";
-
-          ctrl.innerHTML = `
-             <div class="ui action input fluid">
-               <input type="text" id="ans-input" placeholder="Your answer...">
-               <button class="ui primary button" onclick="sendAnswer()">
-                 Submit ${gameState.phase === "Answering" ? '(<span class="timer-text">--</span>)' : ""}
-               </button>
-             </div>
-           `;
-          document.getElementById("ans-input").value = draft;
-          return;
-        }
-
-        if (gameState.phase === "Picking") {
-          if (me.status === "Picking") {
-            ctrl.innerHTML = `
-              <div class="ui buttons fluid">
-                <button class="ui primary button" onclick="sendAction('take')">
-                  <i class="hand pointer icon"></i> Take (<span class="timer-text">--</span>)
-                </button>
-                <div class="or"></div>
-                <button class="ui negative button" onclick="sendAction('stop')">Stop</button>
-              </div>
-            `;
-          } else {
-            ctrl.innerHTML =
-              '<div class="ui message">Wait for your turn...</div>';
-          }
-        } else if (gameState.phase === "Settlement") {
-          ctrl.innerHTML =
-            '<div class="ui message">The game has concluded．</div>';
-        } else {
-          ctrl.innerHTML =
-            '<div class="ui message info">Waiting for the admin to start the game．</div>';
-        }
-
+        // 调用子模板的 renderControls
+        if (typeof renderControls === "function")
+          renderControls(ctrl, me, gameState);
         updateUiTimer();
       }
 
-      // 页面加载完成后启动连接
       $(document).ready(connect);
     </script>
+    {% block scripts %}{% endblock %}
   </body>
 </html>

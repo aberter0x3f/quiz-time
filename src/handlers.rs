@@ -1,13 +1,10 @@
 use crate::{
-  logic::{
-    advance_turn, build_client_view, check_all_submitted, perform_take_action, send_sys_log,
-  },
-  models::{AppState, ClientMsg, GamePhase, InternalMsg, Player, PlayerStatus},
-  templates::render_game,
+  game::GameLogic,
+  models::{ClientMsg, InternalMsg},
+  state::AppState,
 };
 use askama::Template;
 use axum::{
-  body::Body,
   extract::{
     Query, State,
     ws::{Message, WebSocket, WebSocketUpgrade},
@@ -21,82 +18,130 @@ use regex::Regex;
 use std::{
   collections::HashMap,
   sync::{Arc, OnceLock},
-  time::Instant,
 };
 
-// 鉴权结果
+#[derive(Template)]
+#[template(path = "chain.html")]
+struct ChainTemplate {
+  username: String,
+  is_spectate: bool,
+  is_super: bool,
+}
+
+#[derive(Template)]
+#[template(path = "pinyin.html")]
+struct PinyinTemplate {
+  username: String,
+  is_spectate: bool,
+  is_super: bool,
+}
+
 pub enum AuthResult {
   Player(String),
   SuperSpectator,
   Invalid,
 }
 
-// 鉴权辅助
 pub fn check_auth(auth_header: Option<&str>, player_pass: &str, super_pass: &str) -> AuthResult {
   static AUTH_REGEX: OnceLock<Regex> = OnceLock::new();
-
   let auth_str = match auth_header.and_then(|h| h.strip_prefix("Basic ")) {
     Some(s) => s,
     None => return AuthResult::Invalid,
   };
-
   let decoded = match BASE64.decode(auth_str) {
     Ok(d) => d,
     Err(_) => return AuthResult::Invalid,
   };
-
   let s = match String::from_utf8(decoded) {
     Ok(s) => s,
     Err(_) => return AuthResult::Invalid,
   };
-
   let (u, p) = match s.split_once(':') {
     Some(res) => res,
     None => return AuthResult::Invalid,
   };
-
   if p == super_pass {
     return AuthResult::SuperSpectator;
   }
-
   if p == player_pass {
-    let re = AUTH_REGEX.get_or_init(|| Regex::new(r"^[0-9A-Za-z_\-]{1,16}$").unwrap());
+    let re = AUTH_REGEX.get_or_init(|| Regex::new(r"^[0-9A-Za-z_\-]{1,24}$").unwrap());
     if re.is_match(u) {
       return AuthResult::Player(u.to_string());
     }
   }
-
   AuthResult::Invalid
+}
+
+fn unauthorized_resp(realm: &str) -> Response {
+  let mut resp = Response::new(axum::body::Body::new("Unauthorized".to_string()).into());
+  *resp.status_mut() = StatusCode::UNAUTHORIZED;
+  resp.headers_mut().insert(
+    header::WWW_AUTHENTICATE,
+    format!("Basic realm=\"{}\"", realm).parse().unwrap(),
+  );
+  resp
 }
 
 pub async fn index_handler(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
   let game = state.game.read().await;
-  let auth_header = headers
+  let (pp, sp) = game.get_passwords();
+  let auth = headers
     .get(header::AUTHORIZATION)
     .and_then(|h| h.to_str().ok());
-
-  match check_auth(
-    auth_header,
-    &game.player_password,
-    &game.super_spectate_password,
-  ) {
-    AuthResult::Player(username) => {
-      Html(render_game(&username, false, false).render().unwrap()).into_response()
+  match check_auth(auth, &pp, &sp) {
+    AuthResult::Player(u) => {
+      if state.is_pinyin {
+        Html(
+          PinyinTemplate {
+            username: u,
+            is_spectate: false,
+            is_super: false,
+          }
+          .render()
+          .unwrap(),
+        )
+        .into_response()
+      } else {
+        Html(
+          ChainTemplate {
+            username: u,
+            is_spectate: false,
+            is_super: false,
+          }
+          .render()
+          .unwrap(),
+        )
+        .into_response()
+      }
     }
-    _ => {
-      let mut resp = Response::new(Body::new("Unauthorized".to_string()).into());
-      *resp.status_mut() = StatusCode::UNAUTHORIZED;
-      resp.headers_mut().insert(
-        header::WWW_AUTHENTICATE,
-        "Basic realm=\"Quiz Game\"".parse().unwrap(),
-      );
-      resp
-    }
+    _ => unauthorized_resp("Quiz Game"),
   }
 }
 
-pub async fn spectate_handler() -> impl IntoResponse {
-  Html(render_game("", true, false).render().unwrap())
+pub async fn spectate_handler(State(state): State<Arc<AppState>>) -> Response {
+  if state.is_pinyin {
+    Html(
+      PinyinTemplate {
+        username: "".into(),
+        is_spectate: true,
+        is_super: false,
+      }
+      .render()
+      .unwrap(),
+    )
+    .into_response()
+  } else {
+    Html(
+      ChainTemplate {
+        username: "".into(),
+        is_spectate: true,
+        is_super: false,
+      }
+      .render()
+      .unwrap(),
+    )
+    .into_response()
+  }
 }
 
 pub async fn super_spectate_handler(
@@ -104,79 +149,73 @@ pub async fn super_spectate_handler(
   headers: HeaderMap,
 ) -> Response {
   let game = state.game.read().await;
-  let auth_header = headers
-    .get(header::AUTHORIZATION)
-    .and_then(|h| h.to_str().ok());
-
-  // 检查是否使用了超级观察者密码
+  let (pp, sp) = game.get_passwords();
   match check_auth(
-    auth_header,
-    &game.player_password,
-    &game.super_spectate_password,
+    headers
+      .get(header::AUTHORIZATION)
+      .and_then(|h| h.to_str().ok()),
+    &pp,
+    &sp,
   ) {
     AuthResult::SuperSpectator => {
-      Html(render_game("", true, true).render().unwrap()).into_response()
+      if state.is_pinyin {
+        Html(
+          PinyinTemplate {
+            username: "".into(),
+            is_spectate: true,
+            is_super: true,
+          }
+          .render()
+          .unwrap(),
+        )
+        .into_response()
+      } else {
+        Html(
+          ChainTemplate {
+            username: "".into(),
+            is_spectate: true,
+            is_super: true,
+          }
+          .render()
+          .unwrap(),
+        )
+        .into_response()
+      }
     }
-    _ => {
-      let mut resp = Response::new(Body::new("Unauthorized Super Spectator".to_string()).into());
-      *resp.status_mut() = StatusCode::UNAUTHORIZED;
-      resp.headers_mut().insert(
-        header::WWW_AUTHENTICATE,
-        "Basic realm=\"Quiz Game Super\"".parse().unwrap(),
-      );
-      resp
-    }
+    _ => unauthorized_resp("Quiz Game"),
   }
 }
 
 pub async fn ws_handler(
-  ws: WebSocketUpgrade,
   State(state): State<Arc<AppState>>,
   headers: HeaderMap,
   Query(params): Query<HashMap<String, String>>,
+  ws: WebSocketUpgrade,
 ) -> Response {
-  let game_r = state.game.read().await;
-  let auth_header = headers
+  let game = state.game.read().await;
+  let (pp, sp) = game.get_passwords();
+  let auth = headers
     .get(header::AUTHORIZATION)
     .and_then(|h| h.to_str().ok());
+  let is_spec = params.contains_key("spectate");
+  let is_super = params.contains_key("super");
 
-  let is_spectate_query = params.contains_key("spectate");
-  let is_super_query = params.contains_key("super");
-
-  let (user, is_super_mode) = if is_spectate_query {
-    // 如果请求了超级模式，校验密码
-    if is_super_query {
-      match check_auth(
-        auth_header,
-        &game_r.player_password,
-        &game_r.super_spectate_password,
-      ) {
+  let (user, is_super_mode) = if is_spec {
+    if is_super {
+      match check_auth(auth, &pp, &sp) {
         AuthResult::SuperSpectator => (None, true),
-        _ => return (StatusCode::UNAUTHORIZED, "Super Spectator Auth Failed").into_response(),
+        _ => return unauthorized_resp("Quiz Game"),
       }
     } else {
-      // 普通观察者无需密码
       (None, false)
     }
   } else {
-    // 玩家模式
-    match check_auth(
-      auth_header,
-      &game_r.player_password,
-      &game_r.super_spectate_password,
-    ) {
+    match check_auth(auth, &pp, &sp) {
       AuthResult::Player(u) => (Some(u), false),
-      _ => {
-        return (
-          StatusCode::UNAUTHORIZED,
-          [(header::WWW_AUTHENTICATE, "Basic realm=\"Quiz Game\"")],
-        )
-          .into_response();
-      }
+      _ => return unauthorized_resp("Quiz Game"),
     }
   };
-
-  drop(game_r);
+  drop(game);
   ws.on_upgrade(move |socket| handle_socket(socket, state, user, is_super_mode))
 }
 
@@ -193,58 +232,20 @@ async fn handle_socket(
     .unwrap_or_else(|| format!("Guest_{}", rand::random::<u16>()));
 
   if !is_watcher {
-    let mut g = state.game.write().await;
-    // 玩家加入逻辑...
-    if g.phase != GamePhase::Waiting && !g.player_map.contains_key(&username) {
-      let _ = sender
-        .send(Message::text(
-          serde_json::to_string(
-            &serde_json::json!({"type": "error", "data": "Game in progress, joining denied."}),
-          )
-          .unwrap(),
-        ))
-        .await;
-      return;
-    }
-    if !g.player_map.contains_key(&username) {
-      g.players.push(username.clone());
-      g.player_map.insert(
-        username.clone(),
-        Player {
-          id: username.clone(),
-          color_hue: 0,
-          status: PlayerStatus::Waiting,
-          obtained_indices: Vec::new(),
-          answer: None,
-          is_online: true,
-          last_seen: Instant::now(),
-        },
-      );
-      send_sys_log(
-        &state.tx,
-        "System",
-        format!("{} joined the game.", username),
-      );
-      let _ = state.tx.send(InternalMsg::StateUpdated);
-    } else {
-      if let Some(p) = g.player_map.get_mut(&username) {
-        p.is_online = true;
-      }
-      send_sys_log(&state.tx, "System", format!("{} reconnected.", username));
-      let _ = state.tx.send(InternalMsg::StateUpdated);
-    }
+    state
+      .game
+      .write()
+      .await
+      .handle_join(username.clone(), &state.tx);
   }
 
-  // 构建初始视图
-  let initial_view = {
-    let g = state.game.read().await;
-    build_client_view(&g, &user, is_super)
-  };
-  let _ = sender
-    .send(Message::text(
-      serde_json::to_string(&serde_json::json!({"type": "update", "data": initial_view})).unwrap(),
-    ))
-    .await;
+  // 发送初始状态
+  let initial_view = state.game.read().await.get_view(user.as_deref(), is_super);
+  if let Ok(json) =
+    serde_json::to_string(&serde_json::json!({"type": "update", "data": initial_view}))
+  {
+    let _ = sender.send(Message::text(json)).await;
+  }
 
   let mut rx = state.tx.subscribe();
 
@@ -255,38 +256,11 @@ async fn handle_socket(
           Some(Ok(Message::Text(text))) => {
             if let Ok(msg) = serde_json::from_str::<ClientMsg>(&text) {
               if is_watcher { continue; }
-              let uname = username.as_str();
               let mut g = state.game.write().await;
-
               match msg {
-                ClientMsg::Heartbeat => { if let Some(p) = g.player_map.get_mut(uname) { p.last_seen = Instant::now(); } },
-                ClientMsg::Action { action } => {
-                  if g.phase == GamePhase::Picking && g.players.get(g.current_turn_idx).map(|s| s.as_str()) == Some(uname) {
-                    if action == "take" { perform_take_action(&mut g, &state.tx); }
-                    else if action == "stop" {
-                      if let Some(p) = g.player_map.get_mut(uname) { p.status = PlayerStatus::Stopped; }
-                      send_sys_log(&state.tx, "Action", format!("{} stopped picking.", uname));
-                      advance_turn(&mut g, &state.tx);
-                    }
-                  }
-                },
-                ClientMsg::Answer { content } => {
-                  let can_answer = if let Some(p) = g.player_map.get(uname) {
-                     g.phase == GamePhase::Answering || (g.phase == GamePhase::Picking && p.status == PlayerStatus::Stopped)
-                  } else { false };
-
-                  if can_answer {
-                    if let Some(p) = g.player_map.get_mut(uname) {
-                      if p.status != PlayerStatus::Submitted {
-                        p.answer = Some(content);
-                        p.status = PlayerStatus::Submitted;
-                        send_sys_log(&state.tx, "System", format!("{} submitted an answer.", uname));
-                        check_all_submitted(&mut g, &state.tx);
-                        let _ = state.tx.send(InternalMsg::StateUpdated);
-                      }
-                    }
-                  }
-                }
+                ClientMsg::Heartbeat => g.handle_join(username.clone(), &state.tx),
+                ClientMsg::Action { action } => g.handle_action(&username, action, &state.tx),
+                ClientMsg::Answer { content } => g.handle_answer(&username, content, &state.tx),
               }
             }
           },
@@ -297,41 +271,28 @@ async fn handle_socket(
       Ok(msg) = rx.recv() => {
         match msg {
           InternalMsg::StateUpdated => {
-            let g = state.game.read().await;
-            // 每次更新时，根据是否是超级观察者构建不同视图
-            let view = build_client_view(&g, &user, is_super);
-            let json = serde_json::to_string(&serde_json::json!({"type": "update", "data": view})).unwrap();
-            if sender.send(Message::text(json)).await.is_err() { break; }
+            let view = state.game.read().await.get_view(user.as_deref(), is_super);
+            if let Ok(json) = serde_json::to_string(&serde_json::json!({"type": "update", "data": view})) {
+                if sender.send(Message::text(json)).await.is_err() { break; }
+            }
           },
           InternalMsg::Log(entry) => {
-            let json = serde_json::to_string(&serde_json::json!({"type": "log", "data": entry})).unwrap();
-            if sender.send(Message::text(json)).await.is_err() { break; }
+            if let Ok(json) = serde_json::to_string(&serde_json::json!({"type": "log", "data": entry})) {
+                if sender.send(Message::text(json)).await.is_err() { break; }
+            }
+          },
+          InternalMsg::Toast(toast) => {
+            if toast.to_user == username {
+              if let Ok(json) = serde_json::to_string(&serde_json::json!({"type": "toast", "data": toast})) {
+                  if sender.send(Message::text(json)).await.is_err() { break; }
+              }
+            }
           }
         }
       }
     }
   }
-
-  // 断开处理
   if !is_watcher {
-    let mut g = state.game.write().await;
-    if let Some(p) = g.player_map.get_mut(&username) {
-      p.is_online = false;
-      p.last_seen = Instant::now();
-    }
-
-    if g.phase == GamePhase::Waiting {
-      g.players.retain(|x| x != &username);
-      g.player_map.remove(&username);
-      send_sys_log(&state.tx, "System", format!("{} left the game.", username));
-      let _ = state.tx.send(InternalMsg::StateUpdated);
-    } else {
-      send_sys_log(
-        &state.tx,
-        "System",
-        format!("{} disconnected (reserved for 30s) .", username),
-      );
-      let _ = state.tx.send(InternalMsg::StateUpdated);
-    }
+    state.game.write().await.handle_leave(&username, &state.tx);
   }
 }

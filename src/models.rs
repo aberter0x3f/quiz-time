@@ -1,29 +1,25 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::sync::Arc;
 use std::time::Instant;
-use tokio::sync::{RwLock, broadcast};
 
-// 游戏阶段枚举
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub enum GamePhase {
+  #[default]
   Waiting,
-  Picking,
-  Answering,
+  Picking,   // Chain specific
+  Answering, // Chain specific
   Settlement,
+  Gaming, // Pinyin specific
 }
 
-// 玩家状态枚举
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum PlayerStatus {
   Waiting,
-  Picking,
+  Picking, // Used as "Active Turn" in Pinyin
   Stopped,
   Answering,
   Submitted,
 }
 
-// 玩家数据结构
 #[derive(Debug, Clone, Serialize)]
 pub struct Player {
   pub id: String,
@@ -36,24 +32,6 @@ pub struct Player {
   pub last_seen: Instant,
 }
 
-// 游戏核心状态
-pub struct GameState {
-  pub game_id: String,
-  pub phase: GamePhase,
-  pub players: Vec<String>,
-  pub player_map: HashMap<String, Player>,
-  pub problem_text: Vec<char>,
-  pub answer_text: String,
-  pub hint_text: String,
-  pub cursor: usize,
-  pub current_turn_idx: usize,
-  pub turn_deadline: Option<Instant>,
-  pub answer_deadline: Option<Instant>,
-  pub player_password: String,
-  pub super_spectate_password: String,
-}
-
-// 结构化日志负载
 #[derive(Clone, Debug, Serialize)]
 pub struct LogEntry {
   pub who: String,
@@ -61,19 +39,20 @@ pub struct LogEntry {
   pub time: String,
 }
 
+#[derive(Clone, Debug, Serialize)]
+pub struct ToastMsg {
+  pub to_user: String,
+  pub msg: String,
+  pub kind: String, // "info" or "error"
+}
+
 #[derive(Clone, Debug)]
 pub enum InternalMsg {
   StateUpdated,
   Log(LogEntry),
+  Toast(ToastMsg),
 }
 
-// 应用共享状态
-pub struct AppState {
-  pub game: Arc<RwLock<GameState>>,
-  pub tx: broadcast::Sender<InternalMsg>,
-}
-
-// 客户端上行消息
 #[derive(Deserialize)]
 #[serde(tag = "type", content = "data")]
 pub enum ClientMsg {
@@ -82,20 +61,45 @@ pub enum ClientMsg {
   Answer { content: String },
 }
 
-// 下发给客户端的视图数据
-#[derive(Serialize)]
+#[derive(Serialize, Default)]
 pub struct ClientView {
   pub game_id: String,
   pub phase: GamePhase,
   pub hint: String,
   pub players: Vec<PlayerView>,
-  pub grid: Vec<GridCell>,
-  pub my_username: Option<String>,
-  pub is_super: bool, // 标记是否为超级观察者
-  pub turn_deadline_ms: Option<u64>,
-  pub answer_deadline_ms: Option<u64>,
-  pub full_problem: Option<String>,
+  pub deadline_ms: Option<u64>,
+  pub is_super: bool,
   pub correct_answer: Option<String>,
+
+  // Chain Specific
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub grid: Option<Vec<GridCell>>,
+
+  // Pinyin Specific
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub all_initials: Option<Vec<String>>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub all_finals: Option<Vec<String>>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub banned_initials: Option<Vec<String>>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub banned_finals: Option<Vec<String>>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub history: Option<Vec<crate::game::pinyin::PinyinHistoryItem>>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub my_prompt: Option<String>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub is_first_turn: Option<bool>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub is_guessing_turn: Option<bool>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub full_history: Option<Vec<crate::game::pinyin::PinyinHistoryItem>>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub winner: Option<bool>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub end_message: Option<String>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub current_player_id: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -105,7 +109,9 @@ pub struct PlayerView {
   pub status: PlayerStatus,
   pub is_me: bool,
   pub is_online: bool,
-  pub obtained_count: usize,
+  pub score_display: Option<String>,
+  pub extra_info: Option<String>,
+  pub is_active_turn: bool,
   pub answer: Option<String>,
 }
 

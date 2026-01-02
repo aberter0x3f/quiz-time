@@ -1,88 +1,148 @@
-pub mod handlers;
-pub mod logic;
-pub mod models;
-pub mod templates;
+mod game;
+mod handlers;
+mod models;
+mod state;
 
+use crate::game::GameLogic;
+use crate::game::{
+  GameMode, chain::ChainGame, generate_random_id, pinyin::PinyinGame,
+  pinyin_utils::load_pinyin_table,
+};
+use crate::handlers::{index_handler, spectate_handler, super_spectate_handler, ws_handler};
+use crate::state::AppState;
 use axum::{Router, routing::get};
-use std::{collections::HashMap, env, fs, net::SocketAddr, sync::Arc};
+use clap::{Parser, Subcommand};
+use std::{fs, net::SocketAddr, sync::Arc};
 use tokio::sync::{RwLock, broadcast};
 
-use crate::{
-  handlers::{index_handler, spectate_handler, super_spectate_handler, ws_handler},
-  logic::{game_loop, generate_random_password, handle_stdin},
-  models::{AppState, GamePhase, GameState, InternalMsg},
-};
+#[derive(Parser)]
+struct Cli {
+  #[command(subcommand)]
+  command: Commands,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+  Chain {
+    problem_path: String,
+    answer_path: String,
+    hint_path: String,
+  },
+  Pinyin {
+    answer_path: String,
+    hint_path: String,
+    pinyin_table_path: String,
+  },
+}
+
+fn generate_passwords() -> (String, String) {
+  use rand::Rng;
+  const C: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+  let get = || {
+    (0..16)
+      .map(|_| C[rand::thread_rng().gen_range(0..C.len())] as char)
+      .collect()
+  };
+  (get(), get())
+}
 
 #[tokio::main]
 async fn main() {
-  let args: Vec<String> = env::args().collect();
-  if args.len() < 4 {
-    eprintln!("Usage: ./server <problem_path> <answer_path> <hint_path>");
-    return;
-  }
-
-  let problem = fs::read_to_string(&args[1])
-    .expect("Read problem failed")
-    .trim()
-    .chars()
-    .collect();
-  let answer = fs::read_to_string(&args[2])
-    .expect("Read answer failed")
-    .trim()
-    .to_string();
-  let hint = fs::read_to_string(&args[3])
-    .expect("Read hint failed")
-    .trim()
-    .to_string();
-
-  let player_password = generate_random_password();
-  let super_password = generate_random_password();
-
-  // 第一行选手密码，第二行超级观察者密码
-  let pass_file_content = format!("{}\n{}", player_password, super_password);
-  fs::write("passwords.txt", &pass_file_content).expect("Write password failed");
-
+  let cli = Cli::parse();
+  let (pp, sp) = generate_passwords();
+  fs::write("passwords.txt", format!("{}\n{}", pp, sp)).expect("Write passwords failed");
   println!("Passwords generated in passwords.txt");
-  println!("Player Password: {}", player_password);
-  println!("Super Spectator Password: {}", super_password);
+  println!("Player Password: {}", pp);
+  println!("Super Spectator Password: {}", sp);
 
-  // 初始化广播通道
-  let (tx, _) = broadcast::channel::<InternalMsg>(100);
+  let (tx, _) = broadcast::channel(100);
 
-  let game_state = Arc::new(RwLock::new(GameState {
-    game_id: generate_random_password(),
-    phase: GamePhase::Waiting,
-    players: Vec::new(),
-    player_map: HashMap::new(),
-    problem_text: problem,
-    answer_text: answer,
-    hint_text: hint,
-    cursor: 0,
-    current_turn_idx: 0,
-    turn_deadline: None,
-    answer_deadline: None,
-    player_password: player_password,
-    super_spectate_password: super_password,
-  }));
+  let (game_mode, is_pinyin) = match cli.command {
+    Commands::Chain {
+      problem_path,
+      answer_path,
+      hint_path,
+    } => {
+      let p = fs::read_to_string(problem_path)
+        .expect("Read problem")
+        .trim()
+        .chars()
+        .collect();
+      let a = fs::read_to_string(answer_path)
+        .expect("Read answer")
+        .trim()
+        .to_string();
+      let h = fs::read_to_string(hint_path)
+        .expect("Read hint")
+        .trim()
+        .to_string();
+      let g = ChainGame {
+        game_id: generate_random_id(),
+        phase: crate::models::GamePhase::Waiting,
+        players: vec![],
+        player_map: std::collections::HashMap::new(),
+        problem_text: p,
+        answer_text: a,
+        hint_text: h,
+        cursor: 0,
+        current_turn_idx: 0,
+        turn_deadline: None,
+        answer_deadline: None,
+        player_password: pp,
+        super_password: sp,
+      };
+      (GameMode::Chain(g), false)
+    }
+    Commands::Pinyin {
+      answer_path,
+      hint_path,
+      pinyin_table_path,
+    } => {
+      let a = fs::read_to_string(answer_path)
+        .expect("Read answer")
+        .trim()
+        .to_string();
+      let h = fs::read_to_string(hint_path)
+        .expect("Read hint")
+        .trim()
+        .to_string();
+      let table = load_pinyin_table(&pinyin_table_path);
+      let g = PinyinGame::new(a, h, table, pp, sp);
+      (GameMode::Pinyin(g), true)
+    }
+  };
 
   let app_state = Arc::new(AppState {
-    game: game_state.clone(),
+    game: Arc::new(RwLock::new(game_mode)),
     tx: tx.clone(),
+    is_pinyin,
   });
 
-  // 启动后台游戏循环
-  let game_bg = game_state.clone();
-  let tx_bg = tx.clone();
+  // Background Loop
+  let bg_state = app_state.clone();
   tokio::spawn(async move {
-    game_loop(game_bg, tx_bg).await;
+    let mut interval = tokio::time::interval(std::time::Duration::from_millis(100));
+    loop {
+      interval.tick().await;
+      bg_state.game.write().await.tick(&bg_state.tx);
+    }
   });
 
-  // 启动标准输入监听
-  let game_stdin = game_state.clone();
-  let tx_stdin = tx.clone();
-  let handle = tokio::runtime::Handle::current();
+  // Stdin Listener
+  let stdin_state = app_state.clone();
+  let rt = tokio::runtime::Handle::current();
   std::thread::spawn(move || {
-    handle_stdin(game_stdin, tx_stdin, handle);
+    let stdin = std::io::stdin();
+    let mut line = String::new();
+    while stdin.read_line(&mut line).is_ok() {
+      if line.trim() == "/start" {
+        let s = stdin_state.clone();
+        rt.spawn(async move {
+          s.game.write().await.start_game(&s.tx);
+        });
+      }
+      line.clear();
+    }
   });
 
   let app = Router::new()
