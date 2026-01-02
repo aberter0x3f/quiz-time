@@ -1,0 +1,11 @@
+{
+  "name": "quiz-time",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {},
+  "packageManager": "pnpm@10.26.2",
+  "devDependencies": {
+    "prettier": "^3.7.4",
+    "prettier-plugin-jinja-template": "^2.1.0"
+  }
+}

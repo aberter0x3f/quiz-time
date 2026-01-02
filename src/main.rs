@@ -8,7 +8,7 @@ use std::{collections::HashMap, env, fs, net::SocketAddr, sync::Arc};
 use tokio::sync::{RwLock, broadcast};
 
 use crate::{
-  handlers::{index_handler, watch_handler, ws_handler},
+  handlers::{index_handler, spectate_handler, ws_handler},
   logic::{game_loop, generate_random_password, handle_stdin},
   models::{AppState, GamePhase, GameState, InternalMsg},
 };
@@ -79,7 +79,7 @@ async fn main() {
 
   let app = Router::new()
     .route("/", get(index_handler))
-    .route("/watch", get(watch_handler))
+    .route("/spectate", get(spectate_handler))
     .route("/ws", get(ws_handler))
     .with_state(app_state);
 

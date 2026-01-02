@@ -1,8 +1,9 @@
 use crate::{
   logic::{advance_turn, build_client_view, check_all_submitted, perform_take_action},
   models::{AppState, ClientMsg, GamePhase, InternalMsg, Player, PlayerStatus},
-  templates::render_html,
+  templates::render_game,
 };
+use askama::Template;
 use axum::{
   body::Body,
   extract::{
@@ -12,31 +13,32 @@ use axum::{
   http::{HeaderMap, StatusCode, header},
   response::{Html, IntoResponse, Response},
 };
+use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use chrono::Local;
 use futures::{sink::SinkExt, stream::StreamExt};
 use regex::Regex;
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::time::Instant;
+use std::{
+  collections::HashMap,
+  sync::{Arc, OnceLock},
+  time::Instant,
+};
 
 // 鉴权辅助
 pub fn check_auth(auth_header: Option<&str>, password: &str) -> Option<String> {
-  if let Some(header) = auth_header {
-    if header.starts_with("Basic ") {
-      if let Ok(decoded) = base64::decode(&header[6..]) {
-        if let Ok(s) = String::from_utf8(decoded) {
-          if let Some((u, p)) = s.split_once(':') {
-            if p == password {
-              let re = Regex::new(r"^[0-9A-Za-z_\-]{1,16}$").unwrap();
-              if re.is_match(u) {
-                return Some(u.to_string());
-              }
-            }
-          }
-        }
-      }
-    }
+  static AUTH_REGEX: OnceLock<Regex> = OnceLock::new();
+
+  let auth_str = auth_header?.strip_prefix("Basic ")?;
+  let decoded = BASE64.decode(auth_str).ok()?;
+  let s = String::from_utf8(decoded).ok()?;
+  let (u, p) = s.split_once(':')?;
+  if p != password {
+    return None;
   }
+  let re = AUTH_REGEX.get_or_init(|| Regex::new(r"^[0-9A-Za-z_\-]{1,16}$").unwrap());
+  if re.is_match(u) {
+    return Some(u.to_string());
+  }
+
   None
 }
 
@@ -47,7 +49,7 @@ pub async fn index_handler(State(state): State<Arc<AppState>>, headers: HeaderMa
     .and_then(|h| h.to_str().ok());
 
   match check_auth(auth_header, &game.server_password) {
-    Some(username) => Html(render_html(&username, false)).into_response(),
+    Some(username) => Html(render_game(&username, false).render().unwrap()).into_response(),
     None => {
       let mut resp = Response::new(Body::new("Unauthorized".to_string()).into());
       *resp.status_mut() = StatusCode::UNAUTHORIZED;
@@ -60,8 +62,8 @@ pub async fn index_handler(State(state): State<Arc<AppState>>, headers: HeaderMa
   }
 }
 
-pub async fn watch_handler() -> Html<String> {
-  Html(render_html("", true))
+pub async fn spectate_handler() -> impl IntoResponse {
+  Html(render_game("", true).render().unwrap())
 }
 
 pub async fn ws_handler(
