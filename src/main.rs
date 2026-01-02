@@ -578,6 +578,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>, user: Option<Str
       let _ = state
         .tx
         .send(InternalMsg::Log(format!("{} 加入了游戏", username)));
+      let _ = state.tx.send(InternalMsg::StateUpdated);
     } else {
       if let Some(p) = g.player_map.get_mut(&username) {
         p.is_online = true;
@@ -585,6 +586,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>, user: Option<Str
       let _ = state
         .tx
         .send(InternalMsg::Log(format!("{} 重连成功", username)));
+      let _ = state.tx.send(InternalMsg::StateUpdated);
     }
   }
 
