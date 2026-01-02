@@ -62,6 +62,7 @@ pub fn render_html(username: &str, is_watch: bool) -> String {
           let socket;
           let gameState = null;
           let timerInterval = null;
+          let currentGameId = null;
 
           function connect() {{
               const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -74,7 +75,15 @@ pub fn render_html(username: &str, is_watch: bool) -> String {
               }};
               socket.onmessage = (event) => {{
                   const msg = JSON.parse(event.data);
-                  if (msg.type === 'update') {{ gameState = msg.data; render(); }}
+                  if (msg.type === 'update') {{
+                    if (currentGameId && msg.data.game_id !== currentGameId) {{
+                      location.reload();
+                      return;
+                    }}
+                    currentGameId = msg.data.game_id;
+                    gameState = msg.data;
+                    render();
+                  }}
                   else if (msg.type === 'log') {{ const parts = msg.data.split(' [系统] '); log("系统", parts[1], parts[0]); }}
                   else if (msg.type === 'error') {{ alert(msg.data); }}
               }};
@@ -102,8 +111,8 @@ pub fn render_html(username: &str, is_watch: bool) -> String {
           }}
 
           function render() {{
-              if (gameState.turn_deadline_ms) gameState._localTargetTime = Date.now() + gameState.turn_deadline_ms;
-              else if (gameState.answer_deadline_ms) gameState._localTargetTime = Date.now() + gameState.answer_deadline_ms;
+              if (gameState.turn_deadline_ms !== null && gameState.turn_deadline_ms !== undefined) gameState._localTargetTime = Date.now() + gameState.turn_deadline_ms;
+              else if (gameState.answer_deadline_ms !== null && gameState.answer_deadline_ms !== undefined) gameState._localTargetTime = Date.now() + gameState.answer_deadline_ms;
               else gameState._localTargetTime = null;
 
               const totalChars = gameState.grid.length;

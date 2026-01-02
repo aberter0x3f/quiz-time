@@ -38,6 +38,7 @@ pub struct Player {
 
 // 游戏核心状态
 pub struct GameState {
+  pub game_id: String,
   pub phase: GamePhase,
   pub players: Vec<String>,
   pub player_map: HashMap<String, Player>,
@@ -76,6 +77,7 @@ pub enum ClientMsg {
 // 下发给客户端的视图数据
 #[derive(Serialize)]
 pub struct ClientView {
+  pub game_id: String,
   pub phase: GamePhase,
   pub hint: String,
   pub players: Vec<PlayerView>,

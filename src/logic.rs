@@ -112,19 +112,20 @@ pub async fn game_loop(game: Arc<RwLock<GameState>>, tx: broadcast::Sender<Inter
       }
 
       for id in timed_out_ids {
-        let _ = tx.send(InternalMsg::Log(format!(
-          "玩家 {} 断线超时，强制移出．",
-          id
-        )));
-        // 标记为已提交空答案
         if let Some(p) = g.player_map.get_mut(&id) {
-          p.answer = Some("".to_string());
-          p.status = PlayerStatus::Submitted;
+          if p.status != PlayerStatus::Submitted {
+            p.status = PlayerStatus::Submitted; // 标记为完成
+            let _ = tx.send(InternalMsg::Log(format!("玩家 {} 断线超时．", id)));
+          }
         }
-        // 若当前轮到该玩家，强制跳过
         if g.phase == GamePhase::Picking && g.players.get(g.current_turn_idx) == Some(&id) {
           force_next_turn(&mut g, &tx);
         }
+      }
+
+      // 检查是否所有人都断线或提交了
+      if g.phase == GamePhase::Answering {
+        check_all_submitted(&mut g, &tx);
       }
     }
 
@@ -245,6 +246,7 @@ pub fn advance_turn(g: &mut GameState, tx: &broadcast::Sender<InternalMsg>) {
 
 pub fn enter_answering_phase(g: &mut GameState, tx: &broadcast::Sender<InternalMsg>) {
   g.phase = GamePhase::Answering;
+  g.turn_deadline = None;
   g.answer_deadline = Some(Instant::now() + Duration::from_secs(60));
 
   for p in g.player_map.values_mut() {
@@ -265,16 +267,23 @@ pub fn finish_game(g: &mut GameState, tx: &broadcast::Sender<InternalMsg>) {
     return;
   }
   g.phase = GamePhase::Settlement;
+  g.turn_deadline = None;
+  g.answer_deadline = None;
   let _ = tx.send(InternalMsg::Log("游戏结束，公布结果！".to_string()));
   let _ = tx.send(InternalMsg::StateUpdated);
 
+  println!("Game finished. Server will exit in 5s.");
   tokio::spawn(async {
-    tokio::time::sleep(Duration::from_secs(60)).await;
+    tokio::time::sleep(Duration::from_secs(5)).await;
     std::process::exit(0);
   });
 }
 
 pub fn check_all_submitted(g: &mut GameState, tx: &broadcast::Sender<InternalMsg>) {
+  if g.phase != GamePhase::Answering {
+    return;
+  }
+
   let all_done = g.players.iter().all(|id| match g.player_map.get(id) {
     Some(p) => p.status == PlayerStatus::Submitted || !p.is_online,
     None => true,
@@ -351,6 +360,7 @@ pub fn build_client_view(g: &GameState, user: &Option<String>) -> ClientView {
   }
 
   ClientView {
+    game_id: g.game_id.clone(),
     phase: g.phase.clone(),
     hint: g.hint_text.clone(),
     players: players_view,

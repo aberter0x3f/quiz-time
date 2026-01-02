@@ -43,6 +43,7 @@ async fn main() {
   let (tx, _) = broadcast::channel::<InternalMsg>(100);
 
   let game_state = Arc::new(RwLock::new(GameState {
+    game_id: generate_random_password(),
     phase: GamePhase::Waiting,
     players: Vec::new(),
     player_map: HashMap::new(),

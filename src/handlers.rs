@@ -74,11 +74,22 @@ pub async fn ws_handler(
   let auth_header = headers
     .get(header::AUTHORIZATION)
     .and_then(|h| h.to_str().ok());
-  let mut user = check_auth(auth_header, &game_r.server_password);
+  let is_spectate = params.contains_key("spectate");
 
-  if params.contains_key("spectate") {
-    user = None;
-  }
+  let user = if is_spectate {
+    None
+  } else {
+    match check_auth(auth_header, &game_r.server_password) {
+      Some(u) => Some(u),
+      None => {
+        return (
+          StatusCode::UNAUTHORIZED,
+          [(header::WWW_AUTHENTICATE, "Basic realm=\"Quiz Game\"")],
+        )
+          .into_response();
+      }
+    }
+  };
 
   drop(game_r);
   ws.on_upgrade(move |socket| handle_socket(socket, state, user))
