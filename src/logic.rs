@@ -11,12 +11,17 @@ use crate::models::{
   ClientView, GamePhase, GameState, GridCell, InternalMsg, LogEntry, PlayerStatus, PlayerView,
 };
 
-// 辅助函数用于快速发送结构化系统日志
-fn send_sys_log(tx: &broadcast::Sender<InternalMsg>, who: &str, text: String) {
+// 辅助函数用于快速发送结构化系统日志，同时打印到服务器控制台
+pub fn send_sys_log(tx: &broadcast::Sender<InternalMsg>, who: &str, text: String) {
+  let time_str = Local::now().format("%H:%M:%S").to_string();
+
+  // 同步打印到服务器标准输出
+  println!("[{}] {}: {}", time_str, who, text);
+
   let _ = tx.send(InternalMsg::Log(LogEntry {
     who: who.to_string(),
     text,
-    time: Local::now().format("%H:%M:%S").to_string(),
+    time: time_str,
   }));
 }
 
@@ -276,7 +281,9 @@ pub fn enter_answering_phase(g: &mut GameState, tx: &broadcast::Sender<InternalM
     "System",
     "Picking phase ended, 60s to answer.".to_string(),
   );
+
   let _ = tx.send(InternalMsg::StateUpdated);
+  check_all_submitted(g, tx);
 }
 
 pub fn finish_game(g: &mut GameState, tx: &broadcast::Sender<InternalMsg>) {
@@ -311,8 +318,8 @@ pub fn check_all_submitted(g: &mut GameState, tx: &broadcast::Sender<InternalMsg
   }
 }
 
-// 构建视图，对不可见数据进行脱敏
-pub fn build_client_view(g: &GameState, user: &Option<String>) -> ClientView {
+// 构建视图
+pub fn build_client_view(g: &GameState, user: &Option<String>, is_super: bool) -> ClientView {
   let now = Instant::now();
   let turn_deadline_ms = g
     .turn_deadline
@@ -327,7 +334,8 @@ pub fn build_client_view(g: &GameState, user: &Option<String>) -> ClientView {
     .map(|id| {
       let p = &g.player_map[id];
       let is_me = user.as_ref() == Some(id);
-      let answer_visible = g.phase == GamePhase::Settlement || is_me;
+      // 超级观察者始终可见，结算阶段始终可见，自己始终可见
+      let answer_visible = is_super || g.phase == GamePhase::Settlement || is_me;
 
       PlayerView {
         id: p.id.clone(),
@@ -364,7 +372,8 @@ pub fn build_client_view(g: &GameState, user: &Option<String>) -> ClientView {
       if let Some(p) = g.player_map.get(oid) {
         color = Some(p.color_hue);
         let is_mine = user.as_ref() == Some(oid);
-        if g.phase == GamePhase::Settlement || is_mine {
+        // 超级观察者、结算阶段、或者字属于自己时可见
+        if is_super || g.phase == GamePhase::Settlement || is_mine {
           char_content = Some(g.problem_text[i]);
         }
       }
@@ -383,14 +392,15 @@ pub fn build_client_view(g: &GameState, user: &Option<String>) -> ClientView {
     players: players_view,
     grid,
     my_username: user.clone(),
+    is_super,
     turn_deadline_ms,
     answer_deadline_ms,
-    full_problem: if g.phase == GamePhase::Settlement {
+    full_problem: if is_super || g.phase == GamePhase::Settlement {
       Some(g.problem_text.iter().collect())
     } else {
       None
     },
-    correct_answer: if g.phase == GamePhase::Settlement {
+    correct_answer: if is_super || g.phase == GamePhase::Settlement {
       Some(g.answer_text.clone())
     } else {
       None

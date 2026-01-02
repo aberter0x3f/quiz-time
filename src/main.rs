@@ -8,7 +8,7 @@ use std::{collections::HashMap, env, fs, net::SocketAddr, sync::Arc};
 use tokio::sync::{RwLock, broadcast};
 
 use crate::{
-  handlers::{index_handler, spectate_handler, ws_handler},
+  handlers::{index_handler, spectate_handler, super_spectate_handler, ws_handler},
   logic::{game_loop, generate_random_password, handle_stdin},
   models::{AppState, GamePhase, GameState, InternalMsg},
 };
@@ -35,9 +35,16 @@ async fn main() {
     .trim()
     .to_string();
 
-  let password = generate_random_password();
-  fs::write("passwords.txt", &password).expect("Write password failed");
-  println!("Password generated: {}", password);
+  let player_password = generate_random_password();
+  let super_password = generate_random_password();
+
+  // 第一行选手密码，第二行超级观察者密码
+  let pass_file_content = format!("{}\n{}", player_password, super_password);
+  fs::write("passwords.txt", &pass_file_content).expect("Write password failed");
+
+  println!("Passwords generated in passwords.txt");
+  println!("Player Password: {}", player_password);
+  println!("Super Spectator Password: {}", super_password);
 
   // 初始化广播通道
   let (tx, _) = broadcast::channel::<InternalMsg>(100);
@@ -54,7 +61,8 @@ async fn main() {
     current_turn_idx: 0,
     turn_deadline: None,
     answer_deadline: None,
-    server_password: password,
+    player_password: player_password,
+    super_spectate_password: super_password,
   }));
 
   let app_state = Arc::new(AppState {
@@ -80,6 +88,7 @@ async fn main() {
   let app = Router::new()
     .route("/", get(index_handler))
     .route("/spectate", get(spectate_handler))
+    .route("/super-spectate", get(super_spectate_handler))
     .route("/ws", get(ws_handler))
     .with_state(app_state);
 

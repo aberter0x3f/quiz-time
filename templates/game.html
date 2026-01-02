@@ -122,8 +122,18 @@
 
       <!-- 主游戏区域 -->
       <div class="main-panel">
-        <div class="ui top attached segment">
-          <h3 class="ui header" id="hint-box">Loading...</h3>
+        <div
+          class="ui top attached segment"
+          style="display: flex; justify-content: space-between; align-items: center;"
+        >
+          <h3 class="ui header" id="hint-box" style="margin:0;">Loading...</h3>
+          <button
+            class="ui mini icon button basic"
+            onclick="copyContent()"
+            title="Copy content to clipboard"
+          >
+            <i class="copy outline icon"></i> Copy Content
+          </button>
         </div>
 
         <div class="ui attached segment content-scroll">
@@ -142,13 +152,14 @@
 
       <!-- 日志面板 -->
       <div class="log-panel">
-        <h4 class="ui dividing header">System Logs</h4>
+        <h4 class="ui dividing header">Logs</h4>
         <div class="ui small feed" id="log-box"></div>
       </div>
     </div>
 
     <script>
       const isSpectate = "{{ is_spectate }}".toLowerCase() === "true";
+      const isSuper = "{{ is_super }}".toLowerCase() === "true";
       const username = "{{ username }}";
       let socket;
       let gameState = null;
@@ -157,8 +168,14 @@
 
       function connect() {
         const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-        const qs = isSpectate ? "?spectate=true" : "";
-        socket = new WebSocket(`${protocol}//${window.location.host}/ws${qs}`);
+        let qs = [];
+        if (isSpectate) qs.push("spectate=true");
+        if (isSuper) qs.push("super=true");
+        const qsStr = qs.length > 0 ? "?" + qs.join("&") : "";
+
+        socket = new WebSocket(
+          `${protocol}//${window.location.host}/ws${qsStr}`,
+        );
 
         socket.onopen = () => {
           document.getElementById("status-loader").classList.remove("active");
@@ -223,6 +240,29 @@
         socket.send(JSON.stringify({ type: "Answer", data: { content: val } }));
       }
 
+      function copyContent() {
+        if (!gameState || !gameState.grid) return;
+        // 拼接当前看到的所有字符
+        const text = gameState.grid
+          .map((cell) => (cell.char_content ? cell.char_content : ""))
+          .join("");
+
+        navigator.clipboard.writeText(text).then(
+          () => {
+            $("body").toast({
+              class: "success",
+              message: `Copied ${text.length} characters.`,
+            });
+          },
+          () => {
+            $("body").toast({
+              class: "error",
+              message: "Failed to copy.",
+            });
+          },
+        );
+      }
+
       function updateUiTimer() {
         if (!gameState || !gameState._localTargetTime) return;
         const rem = Math.max(
@@ -245,8 +285,12 @@
         // 渲染顶部标题
         const totalChars = gameState.grid.length;
         const hintText = gameState.hint || "Waiting...";
+        let suffix = "";
+        if (gameState.is_super) suffix += " [SUPER]";
+        if (isSpectate) suffix += " [SPECTATOR]";
+
         document.getElementById("hint-box").innerText =
-          `${hintText} (${totalChars} chars)`;
+          `${hintText} (${totalChars} chars)${suffix}`;
 
         // 渲染玩家列表
         const pList = document.getElementById("player-list");
@@ -262,7 +306,11 @@
           const dotColor = p.is_online ? "green" : "grey";
           const nameColor = `hsl(${p.color_hue}, 70%, 35%)`;
 
-          // 状态点 | 名字 (Me) | (伸缩空间) | 字数
+          let extraInfo = "";
+          if (gameState.is_super && p.answer) {
+            extraInfo = `<div style="font-size: 0.8em; color: #d01919; margin-top:2px;">Ans: ${p.answer}</div>`;
+          }
+
           item.innerHTML = `
             <div class="ui mini ${dotColor} empty circular label" style="margin: 0 0.8em 0 0;"></div>
             <div style="flex: 1; display: flex; flex-direction: column;">
@@ -271,6 +319,7 @@
                 ${p.is_me ? '<span class="ui mini blue label" style="margin-left: 0.5em; padding: 0.2em 0.5em;">Me</span>' : ""}
               </div>
               <div class="description" style="font-size: 0.85em; color: rgba(0,0,0,0.5);">${p.status}</div>
+              ${extraInfo}
             </div>
             <div class="ui label" style="margin-left: 1em;">
               <i class="font icon"></i>${p.obtained_count}
@@ -301,9 +350,7 @@
           let html = `
             <div class="ui segment">
               <h2 class="ui header">Result</h2>
-              <div class="ui message info"><strong>Answer:</strong> ${gameState.correct_answer}</div>
-              <h4 class="ui header">Full Problem</h4>
-              <p style="word-break: break-all">${gameState.full_problem}</p>
+              <div class="ui message info"><strong>Correct Answer:</strong> ${gameState.correct_answer}</div>
               <h4 class="ui header">Player Submissions</h4>
               <div class="ui list">
           `;
@@ -321,6 +368,14 @@
             `;
           });
           resArea.innerHTML = html + "</div></div>";
+        } else if (gameState.is_super) {
+          resArea.style.display = "block";
+          resArea.innerHTML = `
+             <div class="ui segment red">
+               <h4 class="ui header">Super Spectator Info</h4>
+               <p><strong>Correct Answer:</strong> ${gameState.correct_answer || "???"}</p>
+             </div>
+            `;
         } else {
           resArea.style.display = "none";
         }
@@ -328,12 +383,45 @@
         // 渲染控制区域
         const ctrl = document.getElementById("control-box");
         if (isSpectate) {
-          ctrl.innerHTML = '<div class="ui message">Spectating Mode</div>';
+          if (isSuper) {
+            ctrl.innerHTML =
+              '<div class="ui message red">Super Spectating Mode</div>';
+          } else {
+            ctrl.innerHTML = '<div class="ui message">Spectating Mode</div>';
+          }
           return;
         }
         const me = gameState.players.find((p) => p.is_me);
         if (!me) {
           ctrl.innerHTML = '<div class="ui message">Joining...</div>';
+          return;
+        }
+
+        // 如果已经提交
+        if (me.status === "Submitted") {
+          ctrl.innerHTML =
+            '<div class="ui message success">Submission received.</div>';
+          return;
+        }
+
+        // 如果处于答题阶段，或者我虽然在 Picking 阶段但已经 Stopped
+        if (
+          gameState.phase === "Answering" ||
+          (gameState.phase === "Picking" && me.status === "Stopped")
+        ) {
+          // 保留输入框中的内容
+          const oldInput = document.getElementById("ans-input");
+          const draft = oldInput ? oldInput.value : me.answer || "";
+
+          ctrl.innerHTML = `
+             <div class="ui action input fluid">
+               <input type="text" id="ans-input" placeholder="Your answer...">
+               <button class="ui primary button" onclick="sendAnswer()">
+                 Submit ${gameState.phase === "Answering" ? '(<span class="timer-text">--</span>)' : ""}
+               </button>
+             </div>
+           `;
+          document.getElementById("ans-input").value = draft;
           return;
         }
 
@@ -351,24 +439,6 @@
           } else {
             ctrl.innerHTML =
               '<div class="ui message">Wait for your turn...</div>';
-          }
-        } else if (gameState.phase === "Answering") {
-          if (me.status === "Submitted") {
-            ctrl.innerHTML =
-              '<div class="ui message success">Submission received. Waiting for others...</div>';
-          } else {
-            // 保留输入框中的内容
-            const oldInput = document.getElementById("ans-input");
-            const draft = oldInput ? oldInput.value : me.answer || "";
-            ctrl.innerHTML = `
-              <div class="ui action input fluid">
-                <input type="text" id="ans-input" placeholder="Your answer...">
-                <button class="ui primary button" onclick="sendAnswer()">
-                  Submit (<span class="timer-text">--</span>)
-                </button>
-              </div>
-            `;
-            document.getElementById("ans-input").value = draft;
           }
         } else if (gameState.phase === "Settlement") {
           ctrl.innerHTML =

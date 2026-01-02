@@ -49,7 +49,8 @@ pub struct GameState {
   pub current_turn_idx: usize,
   pub turn_deadline: Option<Instant>,
   pub answer_deadline: Option<Instant>,
-  pub server_password: String,
+  pub player_password: String,
+  pub super_spectate_password: String,
 }
 
 // 结构化日志负载
@@ -90,6 +91,7 @@ pub struct ClientView {
   pub players: Vec<PlayerView>,
   pub grid: Vec<GridCell>,
   pub my_username: Option<String>,
+  pub is_super: bool, // 标记是否为超级观察者
   pub turn_deadline_ms: Option<u64>,
   pub answer_deadline_ms: Option<u64>,
   pub full_problem: Option<String>,
