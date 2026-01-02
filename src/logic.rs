@@ -1,19 +1,30 @@
+use chrono::Local;
 use rand::seq::SliceRandom;
 use std::collections::HashMap;
 use std::io;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use std::time::Instant;
 use tokio::sync::{RwLock, broadcast};
 
 use crate::models::{
-  ClientView, GamePhase, GameState, GridCell, InternalMsg, PlayerStatus, PlayerView,
+  ClientView, GamePhase, GameState, GridCell, InternalMsg, LogEntry, PlayerStatus, PlayerView,
 };
+
+// 辅助函数用于快速发送结构化系统日志
+fn send_sys_log(tx: &broadcast::Sender<InternalMsg>, who: &str, text: String) {
+  let _ = tx.send(InternalMsg::Log(LogEntry {
+    who: who.to_string(),
+    text,
+    time: Local::now().format("%H:%M:%S").to_string(),
+  }));
+}
 
 pub fn generate_random_password() -> String {
   use rand::Rng;
   const CHARSET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
   let mut rng = rand::thread_rng();
-  (0..12)
+  (0..16)
     .map(|_| {
       let idx = rng.gen_range(0..CHARSET.len());
       CHARSET[idx] as char
@@ -90,7 +101,7 @@ pub async fn start_game(game: Arc<RwLock<GameState>>, tx: broadcast::Sender<Inte
     }
   }
 
-  let _ = tx.send(InternalMsg::Log("比赛开始！顺序已打乱．".to_string()));
+  send_sys_log(&tx, "System", "Game started！Order shuffled.".to_string());
   let _ = tx.send(InternalMsg::StateUpdated);
 }
 
@@ -115,7 +126,11 @@ pub async fn game_loop(game: Arc<RwLock<GameState>>, tx: broadcast::Sender<Inter
         if let Some(p) = g.player_map.get_mut(&id) {
           if p.status != PlayerStatus::Submitted {
             p.status = PlayerStatus::Submitted; // 标记为完成
-            let _ = tx.send(InternalMsg::Log(format!("玩家 {} 断线超时．", id)));
+            send_sys_log(
+              &tx,
+              "System",
+              format!("Player {} disconnected and timed out.", id),
+            );
           }
         }
         if g.phase == GamePhase::Picking && g.players.get(g.current_turn_idx) == Some(&id) {
@@ -164,7 +179,7 @@ pub fn perform_take_action(g: &mut GameState, tx: &broadcast::Sender<InternalMsg
   let current_id = g.players[g.current_turn_idx].clone();
 
   if g.cursor >= g.problem_text.len() {
-    let _ = tx.send(InternalMsg::Log("题面已取完．".to_string()));
+    send_sys_log(tx, "System", "Problem content exhausted.".to_string());
     if let Some(p) = g.player_map.get_mut(&current_id) {
       p.status = PlayerStatus::Stopped;
     }
@@ -174,10 +189,7 @@ pub fn perform_take_action(g: &mut GameState, tx: &broadcast::Sender<InternalMsg
 
   if let Some(p) = g.player_map.get_mut(&current_id) {
     p.obtained_indices.push(g.cursor);
-    let _ = tx.send(InternalMsg::Log(format!(
-      "[操作] {} 拿取了一个字",
-      current_id
-    )));
+    send_sys_log(tx, "Action", format!("{} took a character.", current_id));
   }
   g.cursor += 1;
 
@@ -221,10 +233,14 @@ pub fn advance_turn(g: &mut GameState, tx: &broadcast::Sender<InternalMsg>) {
         }
       }
       g.cursor += remaining_len;
-      let _ = tx.send(InternalMsg::Log(format!(
-        "最后一名选手 {} 自动获得剩余所有字符．",
-        last_pid
-      )));
+      send_sys_log(
+        tx,
+        "System",
+        format!(
+          "The last player {} automatically received remaining characters.",
+          last_pid
+        ),
+      );
     }
 
     if let Some(p) = g.player_map.get_mut(&last_pid) {
@@ -256,9 +272,11 @@ pub fn enter_answering_phase(g: &mut GameState, tx: &broadcast::Sender<InternalM
     }
   }
 
-  let _ = tx.send(InternalMsg::Log(
-    "取字阶段结束，进入 60s 答题时间！".to_string(),
-  ));
+  send_sys_log(
+    tx,
+    "System",
+    "Picking phase ended, 60s to answer.".to_string(),
+  );
   let _ = tx.send(InternalMsg::StateUpdated);
 }
 
@@ -269,7 +287,7 @@ pub fn finish_game(g: &mut GameState, tx: &broadcast::Sender<InternalMsg>) {
   g.phase = GamePhase::Settlement;
   g.turn_deadline = None;
   g.answer_deadline = None;
-  let _ = tx.send(InternalMsg::Log("游戏结束，公布结果！".to_string()));
+  send_sys_log(tx, "System", "Game finished, reveal results.".to_string());
   let _ = tx.send(InternalMsg::StateUpdated);
 
   println!("Game finished. Server will exit in 5s.");

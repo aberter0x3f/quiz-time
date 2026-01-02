@@ -1,6 +1,6 @@
 use crate::{
   logic::{advance_turn, build_client_view, check_all_submitted, perform_take_action},
-  models::{AppState, ClientMsg, GamePhase, InternalMsg, Player, PlayerStatus},
+  models::{AppState, ClientMsg, GamePhase, InternalMsg, LogEntry, Player, PlayerStatus},
   templates::render_game,
 };
 use askama::Template;
@@ -110,7 +110,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>, user: Option<Str
       let _ = sender
         .send(Message::text(
           serde_json::to_string(
-            &serde_json::json!({"type": "error", "data": "游戏已开始，禁止加入．"}),
+            &serde_json::json!({"type": "error", "data": "Game in progress, joining denied."}),
           )
           .unwrap(),
         ))
@@ -131,17 +131,21 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>, user: Option<Str
           last_seen: Instant::now(),
         },
       );
-      let _ = state
-        .tx
-        .send(InternalMsg::Log(format!("{} 加入了游戏", username)));
+      let _ = state.tx.send(InternalMsg::Log(LogEntry {
+        who: "System".to_string(),
+        text: format!("{} joined the game.", username),
+        time: Local::now().format("%H:%M:%S").to_string(),
+      }));
       let _ = state.tx.send(InternalMsg::StateUpdated);
     } else {
       if let Some(p) = g.player_map.get_mut(&username) {
         p.is_online = true;
       }
-      let _ = state
-        .tx
-        .send(InternalMsg::Log(format!("{} 重连成功", username)));
+      let _ = state.tx.send(InternalMsg::Log(LogEntry {
+        who: "System".to_string(),
+        text: format!("{} reconnected.", username),
+        time: Local::now().format("%H:%M:%S").to_string(),
+      }));
       let _ = state.tx.send(InternalMsg::StateUpdated);
     }
   }
@@ -174,7 +178,12 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>, user: Option<Str
                   if g.phase == GamePhase::Picking && g.players.get(g.current_turn_idx).map(|s| s.as_str()) == Some(uname) {
                     if action == "take" { perform_take_action(&mut g, &state.tx); }
                     else if action == "stop" {
-                      if let Some(p) = g.player_map.get_mut(uname) { p.status = PlayerStatus::Stopped; let _ = state.tx.send(InternalMsg::Log(format!("[操作] {} 停止取字", uname))); }
+                      if let Some(p) = g.player_map.get_mut(uname) { p.status = PlayerStatus::Stopped; }
+                      let _ = state.tx.send(InternalMsg::Log(LogEntry {
+                        who: "Action".to_string(),
+                        text: format!("{} stopped picking.", uname),
+                        time: Local::now().format("%H:%M:%S").to_string(),
+                      }));
                       advance_turn(&mut g, &state.tx);
                     }
                   }
@@ -206,8 +215,8 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>, user: Option<Str
             let json = serde_json::to_string(&serde_json::json!({"type": "update", "data": view})).unwrap();
             if sender.send(Message::text(json)).await.is_err() { break; }
           },
-          InternalMsg::Log(l) => {
-            let json = serde_json::to_string(&serde_json::json!({"type": "log", "data": format!("{} [系统] {}", Local::now().format("%H:%M:%S"), l)})).unwrap();
+          InternalMsg::Log(entry) => {
+            let json = serde_json::to_string(&serde_json::json!({"type": "log", "data": entry})).unwrap();
             if sender.send(Message::text(json)).await.is_err() { break; }
           }
         }
@@ -226,15 +235,18 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>, user: Option<Str
     if g.phase == GamePhase::Waiting {
       g.players.retain(|x| x != &username);
       g.player_map.remove(&username);
-      let _ = state
-        .tx
-        .send(InternalMsg::Log(format!("{} 离开了游戏", username)));
+      let _ = state.tx.send(InternalMsg::Log(LogEntry {
+        who: "System".to_string(),
+        text: format!("{} left the game.", username),
+        time: Local::now().format("%H:%M:%S").to_string(),
+      }));
       let _ = state.tx.send(InternalMsg::StateUpdated);
     } else {
-      let _ = state.tx.send(InternalMsg::Log(format!(
-        "{} 掉线了（保留席位 30s）",
-        username
-      )));
+      let _ = state.tx.send(InternalMsg::Log(LogEntry {
+        who: "System".to_string(),
+        text: format!("{} disconnected（reserved for 30s）.", username),
+        time: Local::now().format("%H:%M:%S").to_string(),
+      }));
       let _ = state.tx.send(InternalMsg::StateUpdated);
     }
   }

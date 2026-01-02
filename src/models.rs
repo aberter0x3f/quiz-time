@@ -52,11 +52,18 @@ pub struct GameState {
   pub server_password: String,
 }
 
-// 内部消息广播
+// 结构化日志负载
+#[derive(Clone, Debug, Serialize)]
+pub struct LogEntry {
+  pub who: String,
+  pub text: String,
+  pub time: String,
+}
+
 #[derive(Clone, Debug)]
 pub enum InternalMsg {
   StateUpdated,
-  Log(String),
+  Log(LogEntry),
 }
 
 // 应用共享状态

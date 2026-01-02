@@ -1,12 +1,12 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta
       name="viewport"
       content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"
     />
-    <title>Quiz 接龙</title>
+    <title>Quiz Chain</title>
     <link
       rel="stylesheet"
       href="https://unpkg.com/sanitize.css@13.0.0/sanitize.css"
@@ -202,7 +202,7 @@
         </div>
       </div>
       <div class="controls" id="control-box">
-        <div id="status-text">连接中...</div>
+        <div id="status-text">Connecting...</div>
       </div>
     </div>
     <div class="log-panel" id="log-box"></div>
@@ -238,8 +238,7 @@
             gameState = msg.data;
             render();
           } else if (msg.type === "log") {
-            const parts = msg.data.split(" [系统] ");
-            log("System", parts[1], parts[0]);
+            log(msg.data.who, msg.data.text, msg.data.time);
           } else if (msg.type === "error") {
             alert(msg.data);
           }
@@ -252,7 +251,7 @@
         const div = document.createElement("div");
         div.style.marginBottom = "4px";
         div.style.wordBreak = "break-all";
-        div.innerText = `${time || new Date().toLocaleTimeString("en-GB")} [${who}] ${text}`;
+        div.innerText = `${time} [${who}] ${text}`;
         box.appendChild(div);
         box.scrollTop = box.scrollHeight;
       }
@@ -330,11 +329,7 @@
           gameState.players.forEach((p) => {
             let color = p.answer === gameState.correct_answer ? "green" : "red";
             let showAns =
-              p.answer === null
-                ? "(None)"
-                : p.answer === ""
-                  ? "(Empty)"
-                  : p.answer;
+              p.answer === null || p.answer === "" ? "(Empty)" : p.answer;
             html += `<li style="color:${color}">${p.id}: ${showAns}</li>`;
           });
           resArea.innerHTML = html + "</ul>";
