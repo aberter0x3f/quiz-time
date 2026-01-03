@@ -30,6 +30,7 @@ pub struct RoomPlayer {
   pub name: String,
   pub is_online: bool,
   pub is_spectator: bool,
+  pub is_admin: bool,
   pub last_seen: Instant,
   pub color_hue: u16,
 }
@@ -57,17 +58,21 @@ impl Room {
     user_id: i64,
     username: String,
     is_spectator: bool,
-    is_admin: bool,
+    is_site_admin: bool,
   ) -> broadcast::Receiver<InternalMsg> {
     let rx = self.tx.subscribe();
     let now = Instant::now();
+
+    // 计算该用户在房间内的有效管理员权限
+    let is_room_admin = self.admin_ids.contains(&user_id) || is_site_admin;
 
     if let Some(p) = self.players.get_mut(&user_id) {
       // Reconnect
       p.is_online = true;
       p.last_seen = now;
-      // Update spectator status on rejoin
+      // Update spectator/admin status on rejoin
       p.is_spectator = is_spectator;
+      p.is_admin = is_room_admin;
       let _ = self.tx.send(InternalMsg::Log {
         who: "System".into(),
         text: format!("{} reconnected", username),
@@ -77,8 +82,7 @@ impl Room {
       // New Join
       if is_spectator
         || self.players.iter().filter(|p| !p.1.is_spectator).count() < self.max_players
-        || self.admin_ids.contains(&user_id)
-        || is_admin
+        || is_room_admin
       {
         let hue = (self.players.len() * 360 / self.max_players.max(1)) as u16;
         self.players.insert(
@@ -88,6 +92,7 @@ impl Room {
             name: username.clone(),
             is_online: true,
             is_spectator,
+            is_admin: is_room_admin,
             last_seen: now,
             color_hue: hue,
           },
@@ -320,7 +325,8 @@ impl Room {
       }
 
       views.push(PlayerView {
-        id: rp.name.clone(),
+        id: rp.id,
+        name: rp.name.clone(),
         color_hue: rp.color_hue,
         status: if rp.is_spectator {
           PlayerStatus::Waiting
@@ -333,6 +339,7 @@ impl Room {
         score_display: score,
         answer: ans,
         is_spectator: rp.is_spectator,
+        is_admin: rp.is_admin,
       });
     }
   }

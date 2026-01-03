@@ -61,7 +61,7 @@
           style="display:none; margin-top: 1em;"
         >
           <div class="header">Hint</div>
-          <p id="hint-text"></p>
+          <div id="hint-text"></div>
         </div>
       </div>
 
@@ -329,9 +329,19 @@
         $("#admin-controls").show();
       }
 
+      // Hint & Answer Display Logic
+      let hintHtml = "";
       if (gameState.hint) {
+        hintHtml += `<div>${_.escape(gameState.hint)}</div>`;
+      }
+      if (gameState.correct_answer) {
+        if (hintHtml) hintHtml += `<div class="ui divider"></div>`;
+        hintHtml += `<div style="font-weight: bold">Answer: ${_.escape(gameState.correct_answer)}</div>`;
+      }
+
+      if (hintHtml) {
         $("#hint-segment").show();
-        $("#hint-text").text(gameState.hint);
+        $("#hint-text").html(hintHtml);
       } else {
         $("#hint-segment").hide();
       }
@@ -359,7 +369,7 @@
         const content = $(`<div class="content" style="width: 100%;"></div>`);
 
         // Header (Name + Badges)
-        let headerHtml = `<span class="header">${p.id}</span>`;
+        let headerHtml = `<span class="header">${p.is_admin ? "#" : "$"}${p.id}. ${p.name}</span>`;
         if (p.is_me)
           headerHtml += ` <div class="ui mini label blue basic">ME</div>`;
         if (p.is_spectator)

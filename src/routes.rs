@@ -311,10 +311,14 @@ struct StartGameJson {
 async fn start_game(
   State(state): State<Arc<AppState>>,
   Path(id): Path<Uuid>,
+  axum::Extension(user): axum::Extension<User>,
   Json(payload): Json<StartGameJson>,
 ) -> impl IntoResponse {
   if let Some(r_lock) = state.rooms.get(&id) {
     let mut room = r_lock.write().await;
+    if !room.admin_ids.contains(&user.id) && user.role != Role::Admin {
+      return StatusCode::FORBIDDEN.into_response();
+    }
     room.start_game(
       payload.problem,
       payload.answer,
@@ -322,13 +326,20 @@ async fn start_game(
       state.pinyin_table.clone(),
     );
   }
-  StatusCode::OK
+  StatusCode::OK.into_response()
 }
 
-async fn stop_game(State(state): State<Arc<AppState>>, Path(id): Path<Uuid>) -> impl IntoResponse {
+async fn stop_game(
+  State(state): State<Arc<AppState>>,
+  Path(id): Path<Uuid>,
+  axum::Extension(user): axum::Extension<User>,
+) -> impl IntoResponse {
   if let Some(r_lock) = state.rooms.get(&id) {
     let mut room = r_lock.write().await;
+    if !room.admin_ids.contains(&user.id) && user.role != Role::Admin {
+      return StatusCode::FORBIDDEN.into_response();
+    }
     room.stop_game();
   }
-  StatusCode::OK
+  StatusCode::OK.into_response()
 }

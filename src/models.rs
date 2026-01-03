@@ -99,7 +99,8 @@ pub struct ClientView {
 
 #[derive(Serialize)]
 pub struct PlayerView {
-  pub id: String,
+  pub id: i64,
+  pub name: String,
   pub color_hue: u16,
   pub status: PlayerStatus,
   pub is_me: bool,
@@ -109,6 +110,7 @@ pub struct PlayerView {
   #[serde(skip_serializing_if = "Option::is_none")]
   pub answer: Option<String>,
   pub is_spectator: bool,
+  pub is_admin: bool,
 }
 
 // Chain Specific
