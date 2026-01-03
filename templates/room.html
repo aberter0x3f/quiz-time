@@ -39,7 +39,7 @@
         <!-- Player List -->
         <div class="ui segment">
           <h4 class="ui header">Players (<span id="player-count">0</span>)</h4>
-          <div class="ui list" id="player-list">
+          <div class="ui segments" id="player-list">
             <!-- Rendered by JS -->
           </div>
         </div>
@@ -104,6 +104,7 @@
           <!-- Controls (Integrated inside workspace, bottom) -->
           <div
             id="game-controls"
+            data-ctype="none"
             style="margin-top: 20px; border-top: 1px solid #eee; padding-top: 20px; display:none;"
           >
             <!-- Dynamic Buttons/Inputs -->
@@ -355,9 +356,20 @@
         // Status Dot Color
         let dotColor = p.is_online ? `hsl(${p.color_hue}, 70%, 50%)` : "grey";
 
-        // Item
+        // Item Container - Using UI Segment for visibility
+        // If active turn, use Semantic UI 'left marked green secondary segment' to highlight
+        let segmentClass = "ui segment";
+        if (p.is_active_turn) {
+          segmentClass += " left marked green secondary";
+        }
+
         const item = $(
-          `<div class="item" style="display: flex; align-items: center;"></div>`,
+          `<div class="${segmentClass}" style="display: flex; align-items: center; justify-content: space-between;"></div>`,
+        );
+
+        // Left Part (Dot + Info)
+        const leftPart = $(
+          `<div style="display: flex; align-items: center; flex-grow: 1;"></div>`,
         );
 
         // Avatar/Dot
@@ -375,15 +387,12 @@
         if (p.is_spectator)
           headerHtml += ` <div class="ui mini label grey basic">SPEC</div>`;
 
-        if (p.is_active_turn) item.addClass(["active", "teal"]);
-
         const headerDiv = $(`<div style="display:flex;">${headerHtml}</div>`);
 
         content.append(headerDiv);
 
         // Description (Status + Admin Answer)
         let descText = _.startCase(p.status);
-
         let descHtml = `<div class="description" style="font-size:0.9em; color: #888;">${descText}</div>`;
 
         // Admin seeing answer
@@ -393,12 +402,13 @@
 
         content.append(descHtml);
 
-        item.append(dot).append(content);
+        leftPart.append(dot).append(content);
+        item.append(leftPart);
 
         // Score (Right side)
         if (p.score_display) {
           item.append(
-            `<div style="font-weight:bold; color: #2185d0;">${p.score_display}</div>`,
+            `<div style="font-weight:bold; color: #2185d0; margin-left: 8px;">${p.score_display}</div>`,
           );
         }
 
@@ -501,45 +511,81 @@
       if (!me || me.is_spectator) return; // "Playing" Admins see controls, Spectating Admins don't
 
       const controls = $("#game-controls");
-      controls.empty();
+
+      // 1. 计算新的 HTML 和 控件类型 (ctype)
+      let html = "";
+      let ctype = "none";
 
       if (gameState.room_type === "chain") {
         if (me.status === "picking") {
-          controls.show().html(`
+          ctype = "chain-pick";
+          html = `
           <div class="ui buttons fluid">
              <button class="ui button blue" onclick="sendAction('take')">Take <span class="timer-lbl"></span></button>
              <div class="or"></div>
              <button class="ui button red" onclick="sendAction('stop')">Stop</button>
           </div>
-        `);
+        `;
         } else if (
           me.status === "answering" ||
           (gameState.phase === "answering" && me.status !== "submitted")
         ) {
-          controls.show().html(`
+          ctype = "chain-ans";
+          html = `
            <div class="ui action input fluid">
              <input type="text" id="inp-answer" placeholder="Answer...">
              <button class="ui button green" onclick="sendAnswer()">Submit <span class="timer-lbl"></span></button>
            </div>
-        `);
+        `;
         }
       } else if (gameState.room_type === "pinyin") {
         if (me.is_active_turn) {
           const isGuess = gameState.pinyin_state.is_guessing_turn;
           const prompt = gameState.pinyin_state.my_prompt || "";
-          controls.show().html(`
+          ctype = isGuess ? "py-guess" : "py-desc";
+
+          html = `
             <div class="ui action input fluid">
                <input type="text" id="inp-answer" value="${!isGuess ? prompt : ""}" placeholder="${isGuess ? "Final Guess..." : "Char..."}" autocomplete="off">
                <button class="ui button blue" onclick="sendAnswer()">${isGuess ? "Guess" : "Submit"} <span class="timer-lbl"></span></button>
             </div>
             ${!isGuess && gameState.pinyin_state.is_first_turn ? '<div style="color:orange; font-size:0.9em; margin-top:5px;">First Turn: No answer components allowed.</div>' : ""}
-          `);
-          $("#inp-answer").focus();
+          `;
         } else {
-          controls
-            .show()
-            .html(`<div class="ui message info">Waiting for others...</div>`);
+          ctype = "wait";
+          html = `<div class="ui message info">Waiting for others...</div>`;
         }
+      }
+
+      // 2. 检查是否需要更新 DOM
+      // 如果当前的控件类型和新的类型一致，且该类型包含输入框 (input/guess/desc/ans)，
+      // 则我们假设用户正在输入，为了防止焦点丢失和内容清空，跳过 HTML 替换．
+      const currentType = controls.data("ctype");
+
+      if (html === "") {
+        controls.hide().data("ctype", "none").empty();
+        return;
+      }
+
+      // 核心修复逻辑：
+      // 如果还是同一种输入模式，或者是同一种按钮模式，就只显示容器，不替换 HTML．
+      // 定时器文本由 updateTimerUI 独立更新，不需要重绘 HTML．
+      if (currentType === ctype) {
+        controls.show();
+        return;
+      }
+
+      // 3. 应用新的 HTML
+      controls.data("ctype", ctype).html(html).show();
+
+      // 4. 只有在首次渲染输入框时才自动聚焦
+      if (
+        ctype === "chain-ans" ||
+        ctype === "py-desc" ||
+        ctype === "py-guess"
+      ) {
+        const inp = $("#inp-answer");
+        inp.focus();
       }
     }
 

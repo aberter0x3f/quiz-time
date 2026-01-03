@@ -219,11 +219,11 @@ impl Room {
     let _ = self.tx.send(InternalMsg::StateUpdated);
   }
 
-  pub fn get_view(&self, user_id: Option<i64>, is_super: bool) -> ClientView {
+  pub fn get_view(&self, user_id: Option<i64>, is_site_super: bool) -> ClientView {
     let is_admin = user_id
       .map(|id| self.admin_ids.contains(&id))
       .unwrap_or(false)
-      || is_super;
+      || is_site_super;
 
     let is_spectator = user_id.map_or(false, |id| {
       self.players.get(&id).map_or(false, |p| p.is_spectator)
@@ -263,12 +263,8 @@ impl Room {
         None,
         None,
       ),
-      GameSession::Chain(g) => {
-        g.get_view_data(user_id, is_spectator && (is_super || is_admin), &hue_map)
-      }
-      GameSession::Pinyin(g) => {
-        g.get_view_data(user_id, is_spectator && (is_super || is_admin), &hue_map)
-      }
+      GameSession::Chain(g) => g.get_view_data(user_id, is_spectator && is_admin, &hue_map),
+      GameSession::Pinyin(g) => g.get_view_data(user_id, is_spectator && is_admin, &hue_map),
     };
 
     let mut player_views = Vec::new();
@@ -288,14 +284,28 @@ impl Room {
       all_pids.retain(|id| !order.contains(id));
       // Add game players in order
       for pid in order {
-        self.push_player_view(pid, user_id, is_admin, &hue_map, &mut player_views);
+        self.push_player_view(
+          pid,
+          user_id,
+          is_admin,
+          is_spectator,
+          &hue_map,
+          &mut player_views,
+        );
       }
     }
 
     // Add remaining (Spectators/Waiting)
     all_pids.sort(); // Sort by ID or name if needed
     for pid in all_pids {
-      self.push_player_view(pid, user_id, is_admin, &hue_map, &mut player_views);
+      self.push_player_view(
+        pid,
+        user_id,
+        is_admin,
+        is_spectator,
+        &hue_map,
+        &mut player_views,
+      );
     }
 
     ClientView {
@@ -324,19 +334,24 @@ impl Room {
     &self,
     pid: i64,
     user_id: Option<i64>,
-    is_admin: bool,
+    is_viewer_admin: bool,
+    is_viewer_spectator: bool,
     hue_map: &HashMap<i64, u16>,
     views: &mut Vec<PlayerView>,
   ) {
     if let Some(rp) = self.players.get(&pid) {
       let (status, score, active, ans) = match &self.session {
-        GameSession::Chain(g) => g.get_player_state(pid, user_id, rp.is_spectator && is_admin),
-        GameSession::Pinyin(g) => g.get_player_state(pid, user_id, rp.is_spectator && is_admin),
+        GameSession::Chain(g) => {
+          g.get_player_state(pid, user_id, is_viewer_admin && is_viewer_spectator)
+        }
+        GameSession::Pinyin(g) => {
+          g.get_player_state(pid, user_id, is_viewer_admin && is_viewer_spectator)
+        }
         GameSession::None => (PlayerStatus::Waiting, None, false, None),
       };
 
       // 非管理员不能看到观战人员
-      if rp.is_spectator && !is_admin {
+      if rp.is_spectator && !is_viewer_admin {
         return;
       }
 
