@@ -423,14 +423,42 @@ impl GameLogic for PinyinGame {
     }
 
     // 处理 Banned Initials/Finals 的显示逻辑
-    // 只有当游戏在进行中，且是第一轮规则，且请求者是当前正在行动的玩家时，
-    // 才把答案的声韵母显示为 Ban
-    let mut display_banned_i = self.banned_initials.clone();
-    let mut display_banned_f = self.banned_finals.clone();
+    // 规则：
+    // 1. 如果是结算阶段或 Super，显示所有。
+    // 2. 如果是玩家：
+    //    - 如果是过去行动过的玩家 (midx < current) -> 可以看到 Ban 表 (了解情况)
+    //    - 如果是当前行动的玩家 (midx == current) -> 可以看到 Ban 表 (必须知道规则)
+    //    - 如果是未来玩家 (midx > current) -> 只能看到空表 (不透露信息)
+    // 3. 旁观者可以看到所有 (默认)。
 
+    let mut display_banned_i = HashSet::new();
+    let mut display_banned_f = HashSet::new();
+
+    let show_bans = if is_super || is_settled {
+      true
+    } else if let Some(u) = user {
+      // 玩家视角
+      if let Some(midx) = self.players.iter().position(|p| p == u) {
+        // 只有 过去 或 当前 玩家可见
+        midx <= self.current_player_idx
+      } else {
+        // 非参赛玩家（普通旁观者）可见
+        true
+      }
+    } else {
+      // 匿名旁观者可见
+      true
+    };
+
+    if show_bans {
+      display_banned_i = self.banned_initials.clone();
+      display_banned_f = self.banned_finals.clone();
+    }
+
+    // 第一棒特殊逻辑：
+    // 如果是第一棒，且请求者正是当前玩家，需要将答案的声韵母混入 ban 列表显示
     if self.phase == GamePhase::Gaming && self.is_first_describer {
       if let Some(u) = user {
-        // 检查请求者是否是当前玩家
         if let Some(curr_id) = self.players.get(self.current_player_idx) {
           if curr_id == u {
             display_banned_i.extend(self.answer_initials.clone());
