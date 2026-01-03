@@ -76,8 +76,8 @@ impl PinyinGame {
     }
   }
 
-  pub fn setup_players(&mut self, users: Vec<(i64, u16)>) {
-    for (pid, _) in users {
+  pub fn setup_players(&mut self, users: Vec<i64>) {
+    for pid in users {
       self.players.push(pid.clone());
       self.player_data.insert(
         pid,

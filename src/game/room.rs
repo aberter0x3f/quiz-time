@@ -32,7 +32,6 @@ pub struct RoomPlayer {
   pub is_spectator: bool,
   pub is_admin: bool,
   pub last_seen: Instant,
-  pub color_hue: u16,
 }
 
 impl Room {
@@ -84,7 +83,6 @@ impl Room {
         || self.players.iter().filter(|p| !p.1.is_spectator).count() < self.max_players
         || is_room_admin
       {
-        let hue = (self.players.len() * 360 / self.max_players.max(1)) as u16;
         self.players.insert(
           user_id.clone(),
           RoomPlayer {
@@ -94,7 +92,6 @@ impl Room {
             is_spectator,
             is_admin: is_room_admin,
             last_seen: now,
-            color_hue: hue,
           },
         );
         if !is_spectator {
@@ -187,7 +184,7 @@ impl Room {
     let mut active_players = Vec::new();
     for (pid, p) in &self.players {
       if p.is_online && !p.is_spectator {
-        active_players.push((pid.clone(), p.color_hue));
+        active_players.push(pid.clone());
       }
     }
 
@@ -232,11 +229,29 @@ impl Room {
       self.players.get(&id).map_or(false, |p| p.is_spectator)
     });
 
-    let hue_map: HashMap<i64, u16> = self
-      .players
-      .iter()
-      .map(|(k, v)| (*k, v.color_hue))
-      .collect();
+    // 实时颜色计算逻辑
+    // 1. 确定排序依据（游戏中用游戏列表，大厅中用 ID 排序）
+    let active_order: Vec<i64> = match &self.session {
+      GameSession::Chain(g) => g.players.clone(),
+      GameSession::Pinyin(g) => g.players.clone(),
+      GameSession::None => {
+        let mut ids: Vec<i64> = self
+          .players
+          .iter()
+          .filter(|(_, p)| !p.is_spectator)
+          .map(|(k, _)| *k)
+          .collect();
+        ids.sort(); // 稳定排序
+        ids
+      }
+    };
+
+    let total = active_order.len().max(1);
+    let mut hue_map = HashMap::new();
+    for (i, pid) in active_order.iter().enumerate() {
+      let hue = (i * 360 / total) as u16;
+      hue_map.insert(*pid, hue);
+    }
 
     let (phase, hint, deadline, grid, pinyin_state, winner, correct_ans) = match &self.session {
       GameSession::None => (
@@ -273,14 +288,14 @@ impl Room {
       all_pids.retain(|id| !order.contains(id));
       // Add game players in order
       for pid in order {
-        self.push_player_view(pid, user_id, is_admin, &mut player_views);
+        self.push_player_view(pid, user_id, is_admin, &hue_map, &mut player_views);
       }
     }
 
     // Add remaining (Spectators/Waiting)
     all_pids.sort(); // Sort by ID or name if needed
     for pid in all_pids {
-      self.push_player_view(pid, user_id, is_admin, &mut player_views);
+      self.push_player_view(pid, user_id, is_admin, &hue_map, &mut player_views);
     }
 
     ClientView {
@@ -310,6 +325,7 @@ impl Room {
     pid: i64,
     user_id: Option<i64>,
     is_admin: bool,
+    hue_map: &HashMap<i64, u16>,
     views: &mut Vec<PlayerView>,
   ) {
     if let Some(rp) = self.players.get(&pid) {
@@ -327,7 +343,8 @@ impl Room {
       views.push(PlayerView {
         id: rp.id,
         name: rp.name.clone(),
-        color_hue: rp.color_hue,
+        // 如果在 hue_map 中则使用计算出的颜色，否则（观战）默认为 0
+        color_hue: hue_map.get(&pid).cloned().unwrap_or(0),
         status: if rp.is_spectator {
           PlayerStatus::Waiting
         } else {
