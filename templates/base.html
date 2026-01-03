@@ -3,55 +3,29 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>{% block title %}Quiz Game{% endblock %}</title>
-    <script src="https://unpkg.com/jquery@3.7.1/dist/jquery.min.js"></script>
+    <title>Quiz Time</title>
     <link
       rel="stylesheet"
       type="text/css"
       href="https://unpkg.com/fomantic-ui@2.9.4/dist/semantic.min.css"
     />
+    <script src="https://unpkg.com/jquery@3.7.1/dist/jquery.min.js"></script>
+    <script src="https://unpkg.com/lodash@4.17.21/lodash.min.js"></script>
     <script src="https://unpkg.com/fomantic-ui@2.9.4/dist/semantic.min.js"></script>
     <style>
       body {
         background-color: #f7f7f7;
-        height: 100vh;
-        margin: 0;
-        display: flex;
-        flex-direction: row;
       }
-      .app-container {
-        display: flex;
-        width: 100%;
-        height: 100vh;
+      .main.container {
+        padding-top: 5em;
+        padding-bottom: 5em;
       }
-      .sidebar-panel {
-        width: 260px;
-        overflow-y: auto;
-        border-right: 1px solid rgba(34, 36, 38, 0.15);
-        background: #fff;
-      }
-      .main-panel {
-        flex: 1;
-        display: flex;
-        flex-direction: column;
-        overflow: hidden;
-      }
-      .log-panel {
-        width: 300px;
-        overflow-y: auto;
-        border-left: 1px solid rgba(34, 36, 38, 0.15);
-        background: #fff;
-        padding: 1rem;
-      }
-      .content-scroll {
-        flex: 1;
-        overflow-y: auto;
-        padding: 2rem;
-      }
+      /* Chain Grid Styles */
       .char-grid {
         display: flex;
         flex-wrap: wrap;
-        gap: 5px;
+        gap: 4px;
+        margin: 1rem 0;
       }
       .char-cell {
         width: 40px;
@@ -59,258 +33,59 @@
         display: flex;
         align-items: center;
         justify-content: center;
-        font-size: 1.2rem;
         font-weight: bold;
+        font-size: 1.2rem;
         border: 1px solid rgba(0, 0, 0, 0.1);
+        background: #fff;
+        border-radius: 4px;
       }
-      /* 移动端适配 */
-      @media (max-width: 900px) {
-        body {
-          flex-direction: column;
-          height: auto;
-          padding-bottom: 90px;
-        }
-        .app-container {
-          flex-direction: column;
-          height: auto;
-        }
-        .sidebar-panel,
-        .log-panel {
-          width: 100%;
-          max-height: 250px;
-          border-right: none;
-          border-bottom: 1px solid rgba(34, 36, 38, 0.15);
-        }
-        .log-panel {
-          border-left: none;
-          border-top: 1px solid rgba(34, 36, 38, 0.15);
-          background: #fcfcfc;
-        }
-        .main-panel {
-          height: auto;
-          overflow: visible;
-        }
-        .content-scroll {
-          overflow: visible;
-          height: auto;
-          padding: 1rem;
-        }
-        #control-box {
-          position: fixed;
-          top: auto;
-          bottom: 0;
-          left: 0;
-          width: 100%;
-          height: auto;
-          z-index: 1000;
-          margin: 0;
-          border-radius: 0;
-          border: none;
-          border-top: 1px solid rgba(34, 36, 38, 0.15);
-        }
+      /* Pinyin Tags */
+      .py-tag {
+        font-family: monospace;
+        margin: 2px !important;
+      }
+      .history-box {
+        max-height: 400px;
+        overflow-y: auto;
+        background: #fff;
+        border: 1px solid #ddd;
+        padding: 10px;
+      }
+      .timer-text {
+        color: #db2828;
+        font-weight: bold;
       }
     </style>
-    {% block extra_styles %}{% endblock %}
   </head>
   <body>
-    <div class="app-container">
-      <!-- 玩家列表 -->
-      <div class="sidebar-panel">
-        <div class="ui fluid vertical menu" id="player-list">
-          <div class="header item">Players</div>
-        </div>
-      </div>
+    <div class="ui fixed menu">
+      <div class="ui container">
+        <a href="/" class="header item">Quiz Time</a>
 
-      <!-- 主区域 -->
-      <div class="main-panel">
-        <div
-          class="ui top attached segment"
-          style="display: flex; justify-content: space-between; align-items: center;"
-        >
-          <h3 class="ui header" id="hint-box" style="margin:0;">Loading...</h3>
-          <div id="top-buttons">{% block top_buttons %}{% endblock %}</div>
-        </div>
-
-        <div class="ui attached segment content-scroll">
-          {% block content %}{% endblock %}
-        </div>
-
-        <div class="ui bottom attached segment center aligned" id="control-box">
-          <div class="ui active inline loader" id="status-loader"></div>
-          <span id="status-text">Connecting...</span>
-        </div>
-      </div>
-
-      <!-- 日志 -->
-      <div class="log-panel">
-        <h4 class="ui dividing header">Logs</h4>
-        <div class="ui small feed" id="log-box"></div>
+        {% match user %}
+          {% when Some with (u) %}
+          <div class="right menu">
+            <div class="item">
+              {% if u.is_admin() %}#{% else %}${% endif %}{{ u.id }}.
+              {{ u.name }}
+            </div>
+            <a href="/logout" class="item">Logout</a>
+          </div>
+          {% when None %}
+          <div class="right menu">
+            <a href="/login" class="item">Login</a>
+          </div>
+        {% endmatch %}
       </div>
     </div>
 
+    <div class="ui main container">{% block content %}{% endblock %}</div>
+
     <script>
-      const isSpectate = "{{ is_spectate }}".toLowerCase() === "true";
-      const isSuper = "{{ is_super }}".toLowerCase() === "true";
-      const username = "{{ username }}";
-      let socket;
-      let gameState = null;
-      let timerInterval = null;
-      let currentGameId = null;
-
-      function connect() {
-        const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-        let qs = [];
-        if (isSpectate) qs.push("spectate=true");
-        if (isSuper) qs.push("super=true");
-        const qsStr = qs.length > 0 ? "?" + qs.join("&") : "";
-
-        socket = new WebSocket(
-          `${protocol}//${window.location.host}/ws${qsStr}`,
-        );
-
-        socket.onopen = () => {
-          document.getElementById("status-loader").classList.remove("active");
-          document.getElementById("status-text").innerText = "Connected";
-          setInterval(
-            () =>
-              socket.send(JSON.stringify({ type: "Heartbeat", data: null })),
-            5000,
-          );
-          if (!timerInterval) timerInterval = setInterval(updateUiTimer, 100);
-        };
-
-        socket.onmessage = (event) => {
-          const msg = JSON.parse(event.data);
-          if (msg.type === "update") {
-            if (currentGameId && msg.data.game_id !== currentGameId) {
-              location.reload();
-              return;
-            }
-            currentGameId = msg.data.game_id;
-            gameState = msg.data;
-            renderBase();
-            // 如果子模板定义了 renderGame，则调用
-            if (typeof renderGame === "function") renderGame(gameState);
-          } else if (msg.type === "log") {
-            log(msg.data.who, msg.data.text, msg.data.time);
-          } else if (msg.type === "toast") {
-            $("body").toast({
-              class: msg.data.kind === "error" ? "error" : "info",
-              message: msg.data.msg,
-            });
-          } else if (msg.type === "error") {
-            alert(msg.data);
-          }
-        };
-
-        socket.onclose = () => {
-          document.getElementById("status-loader").classList.add("active");
-          document.getElementById("status-text").innerText =
-            "Disconnected, retrying...";
-          setTimeout(connect, 3000);
-        };
-      }
-
-      function log(who, text, time) {
-        const box = document.getElementById("log-box");
-        const event = document.createElement("div");
-        event.className = "event";
-        event.innerHTML = `<div class="content"><div class="summary"><a class="user">${who}</a> ${text}<div class="date">${time}</div></div></div>`;
-        box.appendChild(event);
-        const panel = document.querySelector(".log-panel");
-        panel.scrollTop = panel.scrollHeight;
-      }
-
-      function sendAction(act) {
-        socket.send(JSON.stringify({ type: "Action", data: { action: act } }));
-      }
-
-      function sendAnswer() {
-        const val = document.getElementById("ans-input").value;
-        socket.send(JSON.stringify({ type: "Answer", data: { content: val } }));
-      }
-
-      function updateUiTimer() {
-        if (!gameState || !gameState._localTargetTime) return;
-        const rem = Math.max(
-          0,
-          (gameState._localTargetTime - Date.now()) / 1000,
-        );
-        const els = document.querySelectorAll(".timer-text");
-        els.forEach((el) => (el.innerText = rem.toFixed(1) + "s"));
-      }
-
-      function renderBase() {
-        // 同步时间
-        if (gameState.deadline_ms != null)
-          gameState._localTargetTime = Date.now() + gameState.deadline_ms;
-        else gameState._localTargetTime = null;
-
-        // 标题
-        let suffix = "";
-        if (gameState.is_super) suffix += " [SUPER]";
-        if (isSpectate) suffix += " [SPECTATOR]";
-        document.getElementById("hint-box").innerText =
-          `${gameState.hint}${suffix}`;
-
-        // 玩家列表
-        const pList = document.getElementById("player-list");
-        pList.innerHTML = '<div class="header item">Players</div>';
-        gameState.players.forEach((p) => {
-          const item = document.createElement("div");
-          item.className = "item";
-          item.style.display = "flex";
-          item.style.alignItems = "center";
-          if (p.is_active_turn) item.classList.add("active", "teal");
-
-          const dotColor = p.is_online ? "green" : "grey";
-          const nameColor = `hsl(${p.color_hue}, 70%, 35%)`;
-          let extraInfo = "";
-          if (p.extra_info)
-            extraInfo = `<div style="font-size: 0.8em; color: #666; margin-top:2px;">${p.extra_info}</div>`;
-          // 超级观察者可见答案
-          if (gameState.is_super && p.answer) {
-            extraInfo += `<div style="font-size: 0.8em; color: #d01919;">Ans: ${p.answer}</div>`;
-          }
-
-          item.innerHTML = `
-            <div class="ui mini ${dotColor} empty circular label" style="margin: 0 0.8em 0 0;"></div>
-            <div style="flex: 1; display: flex; flex-direction: column;">
-              <div style="display: flex; align-items: center;">
-                <span style="color: ${nameColor}; font-weight: bold;">${p.id}</span>
-                ${p.is_me ? '<span class="ui mini blue label" style="margin-left: 0.5em; padding: 0.2em 0.5em;">Me</span>' : ""}
-              </div>
-              <div class="description" style="font-size: 0.85em; color: rgba(0,0,0,0.5);">${p.status}</div>
-              ${extraInfo}
-            </div>
-            ${p.score_display ? `<div class="ui label" style="margin-left: 1em;">${p.score_display}</div>` : ""}
-          `;
-          pList.appendChild(item);
-        });
-
-        // 底部控制区逻辑
-        const ctrl = document.getElementById("control-box");
-        if (isSpectate) {
-          ctrl.innerHTML = isSuper
-            ? '<div class="ui message red">Super Spectating Mode</div>'
-            : '<div class="ui message">Spectating Mode</div>';
-          return;
-        }
-
-        const me = gameState.players.find((p) => p.is_me);
-        if (!me) {
-          ctrl.innerHTML = '<div class="ui message">Joining...</div>';
-          return;
-        }
-
-        // 调用子模板的 renderControls
-        if (typeof renderControls === "function")
-          renderControls(ctrl, me, gameState);
-        updateUiTimer();
-      }
-
-      $(document).ready(connect);
+      $(".ui.dropdown").dropdown();
+      $(".message .close").on("click", function () {
+        $(this).closest(".message").transition("fade");
+      });
     </script>
-    {% block scripts %}{% endblock %}
   </body>
 </html>

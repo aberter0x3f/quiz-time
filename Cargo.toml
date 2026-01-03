@@ -4,17 +4,33 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+anyhow = "1"
 askama = "0.15.1"
 async-trait = "0.1"
-axum = { version = "0.8", features = ["ws"] }
+axum = { version = "0.8", features = ["macros", "ws"] }
+axum-extra = { version = "0.12", features = ["query"] }
 base64 = "0.22"
-chrono = "0.4"
+chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive"] }
+dashmap = "6"
 futures = "0.3"
 headers = "0.4"
+jsonwebtoken = { version = "10", features = ["aws_lc_rs"] }
 mime = "0.3"
+oauth2 = "5"
 rand = "0.8"
 regex = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+strum = { version = "0.27", features = ["derive"] }
 tokio = { version = "1", features = ["full"] }
+tower = "0.5"
+tower-cookies = "0.11"
+tower-http = { version = "0.6", features = [
+  "compression-deflate",
+  "compression-gzip",
+  "trace",
+] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1", features = ["serde", "v7"] }

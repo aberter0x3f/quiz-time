@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+
+{% block content %}
+  <div class="ui middle aligned center aligned grid" style="height: 60vh;">
+    <div class="column" style="max-width: 450px;">
+      <h2 class="ui image header">
+        <div class="content">Log-in to your account</div>
+      </h2>
+      {% match error %}
+        {% when Some with (msg) %}
+        <div class="ui error message">{{ msg }}</div>
+        {% when None %}
+      {% endmatch %}
+
+      <form class="ui large form" method="post" action="/login">
+        <div class="ui stacked segment">
+          <div class="field">
+            <div class="ui left icon input">
+              <i class="user icon"></i>
+              <input
+                type="text"
+                name="username"
+                placeholder="Username"
+                required
+              />
+            </div>
+          </div>
+          <div class="field">
+            <div class="ui left icon input">
+              <i class="lock icon"></i>
+              <input
+                type="password"
+                name="password"
+                placeholder="Password"
+                required
+              />
+            </div>
+          </div>
+          <button class="ui fluid large primary submit button">Login</button>
+        </div>
+      </form>
+
+      <div class="ui message">
+        <a href="/login/codeberg" class="ui fluid button grey">
+          Login with Codeberg
+        </a>
+      </div>
+    </div>
+  </div>
+{% endblock %}

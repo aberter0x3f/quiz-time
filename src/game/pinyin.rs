@@ -1,140 +1,202 @@
-use super::{GameLogic, generate_random_id, pinyin_utils::*};
+use super::pinyin_utils::{PinyinTable, get_text_components, validate_char};
 use crate::models::*;
 use chrono::Local;
 use rand::seq::SliceRandom;
-use serde::Serialize;
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::broadcast;
 
-#[derive(Clone, Serialize, Debug)]
-pub struct PinyinHistoryItem {
-  pub player: String,
-  pub content: String,
-  pub is_guess: bool,
-}
-
 pub struct PinyinGame {
-  pub game_id: String,
+  pub answer: String,
+  pub hint: String,
+  pub table: Arc<PinyinTable>,
   pub phase: GamePhase,
-  pub players: Vec<String>,
-  pub player_map: HashMap<String, Player>,
-  pub pinyin_table: PinyinTable,
-  pub answer_text: String,
-  pub hint_text: String,
-  pub current_player_idx: usize,
+
+  pub players: Vec<i64>,
+  pub player_data: HashMap<i64, PinyinPlayerState>,
+
+  pub current_idx: usize,
   pub turn_deadline: Option<Instant>,
+
   pub history: Vec<PinyinHistoryItem>,
+  pub banned_i: HashSet<String>,
+  pub banned_f: HashSet<String>,
+
+  // Logic flags
   pub is_first_describer: bool,
-  pub current_input_prompt: String,
-  pub banned_initials: HashSet<String>,
-  pub banned_finals: HashSet<String>,
-  pub answer_initials: HashSet<String>,
-  pub answer_finals: HashSet<String>,
-  pub all_initials: Vec<String>,
-  pub all_finals: Vec<String>,
-  pub player_password: String,
-  pub super_password: String,
+  pub current_prompt: String,
+  pub answer_i: HashSet<String>,
+  pub answer_f: HashSet<String>,
+  pub all_i: Vec<String>,
+  pub all_f: Vec<String>,
+
   pub winner: bool,
 }
 
-impl PinyinGame {
-  pub fn new(ans: String, hint: String, table: PinyinTable, pp: String, sp: String) -> Self {
-    let (ans_i, ans_f) = get_text_components(&ans, &table);
+pub struct PinyinPlayerState {
+  pub status: PlayerStatus,
+}
 
-    // 收集所有可能的声韵母用于前端显示
-    let mut all_i = HashSet::new();
-    let mut all_f = HashSet::new();
+impl PinyinGame {
+  pub fn new(ans: String, hint: String, table: Arc<PinyinTable>) -> Self {
+    let (ai, af) = get_text_components(&ans, &table);
+
+    // 预计算所有声韵母供前端显示
+    let mut distinct_i = HashSet::new();
+    let mut distinct_f = HashSet::new();
     for (i, f) in table.values() {
-      all_i.insert(i.clone());
-      all_f.insert(f.clone());
+      distinct_i.insert(i.clone());
+      distinct_f.insert(f.clone());
     }
-    let mut all_i_vec: Vec<_> = all_i.into_iter().collect();
-    let mut all_f_vec: Vec<_> = all_f.into_iter().collect();
-    all_i_vec.sort();
-    all_f_vec.sort();
+    let mut v_i: Vec<_> = distinct_i.into_iter().collect();
+    v_i.sort();
+    let mut v_f: Vec<_> = distinct_f.into_iter().collect();
+    v_f.sort();
 
     Self {
-      game_id: generate_random_id(),
+      answer: ans.clone(),
+      hint,
+      table,
       phase: GamePhase::Waiting,
       players: vec![],
-      player_map: HashMap::new(),
-      pinyin_table: table,
-      answer_text: ans.clone(),
-      hint_text: hint,
-      current_player_idx: 0,
+      player_data: HashMap::new(),
+      current_idx: 0,
       turn_deadline: None,
       history: vec![],
+      banned_i: HashSet::new(),
+      banned_f: HashSet::new(),
       is_first_describer: true,
-      current_input_prompt: ans, // 初始提示就是答案
-      banned_initials: HashSet::new(),
-      banned_finals: HashSet::new(),
-      answer_initials: ans_i,
-      answer_finals: ans_f,
-      all_initials: all_i_vec,
-      all_finals: all_f_vec,
-      player_password: pp,
-      super_password: sp,
+      current_prompt: ans,
+      answer_i: ai,
+      answer_f: af,
+      all_i: v_i,
+      all_f: v_f,
       winner: false,
     }
   }
 
-  fn send_log(&self, tx: &broadcast::Sender<InternalMsg>, who: &str, text: String) {
-    let time_str = Local::now().format("%H:%M:%S").to_string();
-    println!("[{}] {}: {}", time_str, who, text);
-    let _ = tx.send(InternalMsg::Log(LogEntry {
-      who: who.to_string(),
-      text,
-      time: time_str,
-    }));
+  pub fn setup_players(&mut self, users: Vec<(i64, u16)>) {
+    for (pid, _) in users {
+      self.players.push(pid.clone());
+      self.player_data.insert(
+        pid,
+        PinyinPlayerState {
+          status: PlayerStatus::Waiting,
+        },
+      );
+    }
   }
 
-  fn send_toast(&self, tx: &broadcast::Sender<InternalMsg>, to: &str, msg: String, err: bool) {
-    let _ = tx.send(InternalMsg::Toast(ToastMsg {
-      to_user: to.to_string(),
-      msg,
-      kind: if err { "error".into() } else { "info".into() },
-    }));
-  }
+  pub fn start(&mut self, tx: &broadcast::Sender<InternalMsg>) {
+    if self.players.is_empty() {
+      return;
+    }
+    self.players.shuffle(&mut rand::thread_rng());
+    self.phase = GamePhase::Gaming;
+    self.current_idx = 0;
+    self.current_prompt = self.answer.clone();
+    self.is_first_describer = true;
+    self.banned_i.clear();
+    self.banned_f.clear();
+    self.history.clear();
 
-  fn finish_game(&mut self, tx: &broadcast::Sender<InternalMsg>, win: bool) {
-    self.phase = GamePhase::Settlement;
-    self.winner = win;
-    self.turn_deadline = None;
-    self.send_log(
-      tx,
-      "System",
-      format!("Game Over. Result: {}", if win { "Win" } else { "Loss" }),
-    );
-    let _ = tx.send(InternalMsg::StateUpdated);
-    tokio::spawn(async {
-      tokio::time::sleep(Duration::from_secs(5)).await;
-      std::process::exit(0);
+    if let Some(first) = self.players.first() {
+      if let Some(p) = self.player_data.get_mut(first) {
+        p.status = PlayerStatus::Picking; // Active
+      }
+    }
+    self.turn_deadline = Some(Instant::now() + Duration::from_secs(180));
+    let _ = tx.send(InternalMsg::Log {
+      who: "System".into(),
+      text: "Pinyin Game Started".into(),
+      time: Local::now().format("%H:%M:%S").to_string(),
     });
   }
 
-  fn advance_turn(&mut self, tx: &broadcast::Sender<InternalMsg>) {
-    // 更新当前玩家状态
-    if let Some(curr_pid) = self.players.get(self.current_player_idx) {
-      if let Some(p) = self.player_map.get_mut(curr_pid) {
-        p.status = PlayerStatus::Submitted;
-      }
+  pub fn handle_join(&mut self, _: i64, _: &broadcast::Sender<InternalMsg>) {}
+  pub fn handle_leave(&mut self, _: i64, _: &broadcast::Sender<InternalMsg>) {}
+  pub fn handle_action(&mut self, _: i64, _: String, _: &broadcast::Sender<InternalMsg>) {}
+
+  pub fn handle_answer(&mut self, pid: i64, content: String, tx: &broadcast::Sender<InternalMsg>) {
+    if self.phase != GamePhase::Gaming {
+      return;
     }
-
-    self.current_player_idx += 1;
-
-    // 检查是否所有人都结束了
-    if self.current_player_idx >= self.players.len() {
-      self.finish_game(tx, false); // 没人猜对或最后一人超时
+    if self.players.get(self.current_idx) != Some(&pid) {
+      return;
+    }
+    if content.trim().is_empty() {
       return;
     }
 
-    let next_pid = self.players[self.current_player_idx].clone();
-    if let Some(p) = self.player_map.get_mut(&next_pid) {
-      p.status = PlayerStatus::Picking; // 复用 Picking 为 Active
+    let is_guesser = self.current_idx == self.players.len() - 1;
+
+    if is_guesser {
+      let win = content == self.answer;
+      self.history.push(PinyinHistoryItem {
+        player: pid,
+        content: content.clone(),
+        is_guess: true,
+      });
+      self.finish(tx, win);
+    } else {
+      // Validate Pinyin
+      for c in content.chars() {
+        if let Err(e) = validate_char(c, &self.table, &self.banned_i, &self.banned_f) {
+          let _ = tx.send(InternalMsg::Toast {
+            to_user: pid,
+            msg: e,
+            kind: "error".into(),
+          });
+          return;
+        }
+        if self.is_first_describer {
+          let (i, f) = &self.table[&c];
+          if self.answer_i.contains(i) || self.answer_f.contains(f) {
+            let _ = tx.send(InternalMsg::Toast {
+              to_user: pid,
+              msg: format!("Char '{}' invalid (in answer)", c),
+              kind: "error".into(),
+            });
+            return;
+          }
+        }
+      }
+
+      // Update State
+      let (ni, nf) = get_text_components(&content, &self.table);
+      self.banned_i.extend(ni);
+      self.banned_f.extend(nf);
+
+      self.history.push(PinyinHistoryItem {
+        player: pid,
+        content: content.clone(),
+        is_guess: false,
+      });
+      self.current_prompt = content;
+      self.is_first_describer = false;
+
+      if let Some(p) = self.player_data.get_mut(&pid) {
+        p.status = PlayerStatus::Submitted;
+      }
+      self.advance_turn(tx);
+    }
+  }
+
+  fn advance_turn(&mut self, tx: &broadcast::Sender<InternalMsg>) {
+    self.current_idx += 1;
+    if self.current_idx >= self.players.len() {
+      self.finish(tx, false);
+      return;
+    }
+    let next = &self.players[self.current_idx];
+    if let Some(p) = self.player_data.get_mut(next) {
+      p.status = PlayerStatus::Picking;
     }
 
-    if self.current_input_prompt == self.answer_text {
+    // Check "Prompt loop" logic: if prompt == answer (reset), first describer logic applies?
+    // Original logic: if current_input_prompt == answer_text { is_first_describer = true }
+    if self.current_prompt == self.answer {
       self.is_first_describer = true;
     }
 
@@ -142,378 +204,189 @@ impl PinyinGame {
     let _ = tx.send(InternalMsg::StateUpdated);
   }
 
-  fn handle_timeout(&mut self, tx: &broadcast::Sender<InternalMsg>) {
-    let pid = self.players[self.current_player_idx].clone();
-
-    // 如果是最后一人（Guesser）超时 -> 输
-    if self.current_player_idx == self.players.len() - 1 {
-      self.history.push(PinyinHistoryItem {
-        player: pid,
-        content: "(Timeout)".into(),
-        is_guess: true,
-      });
-      self.finish_game(tx, false);
-    } else {
-      // 中间的人超时 -> 跳过，下一个人接手当前 prompt
-      self.history.push(PinyinHistoryItem {
-        player: pid.clone(),
-        content: "(Timeout/Skipped)".into(),
-        is_guess: false,
-      });
-      self.send_log(tx, "System", format!("Player {} timed out. Skipping.", pid));
-      // prompt 不变
-      self.advance_turn(tx);
-    }
-  }
-}
-
-impl GameLogic for PinyinGame {
-  fn handle_join(&mut self, pid: String, tx: &broadcast::Sender<InternalMsg>) {
-    if self.phase != GamePhase::Waiting && !self.player_map.contains_key(&pid) {
-      return;
-    }
-    if !self.player_map.contains_key(&pid) {
-      self.players.push(pid.clone());
-      self.player_map.insert(
-        pid.clone(),
-        Player {
-          id: pid.clone(),
-          color_hue: 0,
-          status: PlayerStatus::Waiting,
-          obtained_indices: vec![],
-          answer: None,
-          is_online: true,
-          last_seen: Instant::now(),
-        },
-      );
-      self.send_log(tx, "System", format!("{} joined.", pid));
-      let _ = tx.send(InternalMsg::StateUpdated);
-    } else {
-      if let Some(p) = self.player_map.get_mut(&pid) {
-        p.last_seen = Instant::now();
-        if !p.is_online {
-          p.is_online = true;
-          self.send_log(tx, "System", format!("{} reconnected.", pid));
-          let _ = tx.send(InternalMsg::StateUpdated);
-        }
-      }
-    }
-  }
-
-  fn handle_leave(&mut self, pid: &str, tx: &broadcast::Sender<InternalMsg>) {
-    if let Some(p) = self.player_map.get_mut(pid) {
-      p.is_online = false;
-      p.last_seen = Instant::now();
-    }
-    if self.phase == GamePhase::Waiting {
-      self.players.retain(|x| x != pid);
-      self.player_map.remove(pid);
-      self.send_log(tx, "System", format!("{} left.", pid));
-    } else {
-      self.send_log(tx, "System", format!("{} disconnected.", pid));
-    }
+  fn finish(&mut self, tx: &broadcast::Sender<InternalMsg>, win: bool) {
+    self.phase = GamePhase::Settlement;
+    self.winner = win;
+    self.turn_deadline = None;
     let _ = tx.send(InternalMsg::StateUpdated);
   }
 
-  fn handle_action(&mut self, _: &str, _: String, _: &broadcast::Sender<InternalMsg>) {}
-
-  fn handle_answer(&mut self, pid: &str, content: String, tx: &broadcast::Sender<InternalMsg>) {
-    if self.phase != GamePhase::Gaming {
-      return;
-    }
-    let curr_pid = &self.players[self.current_player_idx];
-    if pid != curr_pid {
-      return;
-    }
-
-    // 内容空检查
-    if content.trim().is_empty() {
-      self.send_toast(tx, pid, "Content cannot be empty.".into(), true);
-      return;
-    }
-
-    let is_last_player = self.current_player_idx == self.players.len() - 1;
-
-    if is_last_player {
-      // Guesser: 无拼音限制，猜对即赢
-      if content == self.answer_text {
-        self.history.push(PinyinHistoryItem {
-          player: pid.to_string(),
-          content,
-          is_guess: true,
-        });
-        self.finish_game(tx, true);
-      } else {
-        self.history.push(PinyinHistoryItem {
-          player: pid.to_string(),
-          content,
-          is_guess: true,
-        });
-        self.finish_game(tx, false);
-      }
-    } else {
-      // Describer: 验证拼音
-      for c in content.chars() {
-        if let Err(e) = validate_char(
-          c,
-          &self.pinyin_table,
-          &self.banned_initials,
-          &self.banned_finals,
-        ) {
-          self.send_toast(tx, pid, e, true);
-          return;
-        }
-        // 第一棒（或因超时继承第一棒规则的人）不能使用答案的拼音
-        if self.is_first_describer {
-          let (i, f) = &self.pinyin_table[&c];
-          if self.answer_initials.contains(i) || self.answer_finals.contains(f) {
-            self.send_toast(
-              tx,
-              pid,
-              format!("Forbidden char '{}' (part of answer components).", c),
-              true,
-            );
-            return;
-          }
-        }
-      }
-
-      // 更新 Ban List
-      let (new_i, new_f) = get_text_components(&content, &self.pinyin_table);
-      self.banned_initials.extend(new_i);
-      self.banned_finals.extend(new_f);
-
-      self.history.push(PinyinHistoryItem {
-        player: pid.to_string(),
-        content: content.clone(),
-        is_guess: false,
-      });
-      self.current_input_prompt = content;
-      self.is_first_describer = false;
-      self.send_log(tx, "Game", format!("{} finished turn.", pid));
-      self.advance_turn(tx);
-    }
-  }
-
-  fn tick(&mut self, tx: &broadcast::Sender<InternalMsg>) {
-    let now = Instant::now();
+  pub fn tick(
+    &mut self,
+    tx: &broadcast::Sender<InternalMsg>,
+    room_players: &HashMap<i64, super::room::RoomPlayer>,
+  ) {
     if self.phase == GamePhase::Gaming {
-      if self.current_player_idx >= self.players.len() {
+      if self.current_idx >= self.players.len() {
         return;
       }
-      let curr_pid = self.players[self.current_player_idx].clone();
-      let is_offline = self
-        .player_map
-        .get(&curr_pid)
-        .map_or(true, |p| !p.is_online);
+      let curr = &self.players[self.current_idx];
+      let is_online = room_players.get(curr).map(|p| p.is_online).unwrap_or(false);
 
-      if is_offline {
-        self.send_log(
-          tx,
-          "System",
-          format!("Player {} offline. Skipping.", curr_pid),
-        );
-        self.handle_timeout(tx);
-      } else if let Some(d) = self.turn_deadline {
-        if now > d {
-          self.send_log(tx, "System", format!("Player {} timed out.", curr_pid));
-          self.handle_timeout(tx);
+      let mut timeout = false;
+      if !is_online {
+        timeout = true;
+      }
+      if let Some(d) = self.turn_deadline {
+        if Instant::now() > d {
+          timeout = true;
+        }
+      }
+
+      if timeout {
+        // Timeout logic
+        let is_guesser = self.current_idx == self.players.len() - 1;
+        self.history.push(PinyinHistoryItem {
+          player: curr.clone(),
+          content: "(Timeout)".into(),
+          is_guess: is_guesser,
+        });
+        if is_guesser {
+          self.finish(tx, false);
+        } else {
+          self.advance_turn(tx);
         }
       }
     }
   }
 
-  fn start_game(&mut self, tx: &broadcast::Sender<InternalMsg>) {
-    if self.phase != GamePhase::Waiting {
-      return;
-    }
-    let onlines: Vec<String> = self
-      .players
-      .iter()
-      .filter(|id| self.player_map.get(*id).map_or(false, |p| p.is_online))
-      .cloned()
-      .collect();
-    if onlines.is_empty() {
-      println!("Cannot start: no players online");
-      return;
-    }
-    self.players = onlines;
-    self.players.shuffle(&mut rand::thread_rng());
-    for (i, id) in self.players.iter().enumerate() {
-      if let Some(p) = self.player_map.get_mut(id) {
-        p.color_hue = ((i * 360) / self.players.len()) as u16;
-        p.status = PlayerStatus::Waiting;
-      }
-    }
-    self.phase = GamePhase::Gaming;
-    self.current_player_idx = 0;
-    self.current_input_prompt = self.answer_text.clone();
-    self.is_first_describer = true;
-    self.banned_initials.clear();
-    self.banned_finals.clear();
-    self.history.clear();
+  pub fn get_view_data(
+    &self,
+    user_id: Option<i64>,
+    show_all: bool,
+    _hue_map: &HashMap<i64, u16>,
+  ) -> (
+    GamePhase,
+    String,
+    Option<Instant>,
+    Option<Vec<GridCell>>,
+    Option<PinyinSpecificView>,
+    Option<bool>,
+    Option<String>,
+  ) {
+    let is_settled = self.phase == GamePhase::Settlement;
+    let can_see_all = show_all || is_settled;
 
-    if let Some(first) = self.players.first() {
-      if let Some(p) = self.player_map.get_mut(first) {
-        p.status = PlayerStatus::Picking; // Active
-      }
-    }
-    self.turn_deadline = Some(Instant::now() + Duration::from_secs(180));
-    self.send_log(tx, "System", "Pinyin Game Started.".to_string());
-    let _ = tx.send(InternalMsg::StateUpdated);
-  }
-
-  fn get_view(&self, user: Option<&str>, is_super: bool) -> ClientView {
-    let now = Instant::now();
-    let p_views = self
-      .players
-      .iter()
-      .enumerate()
-      .map(|(idx, id)| {
-        let p = &self.player_map[id];
-        let is_me = user == Some(id);
-        let is_active = self.phase == GamePhase::Gaming && idx == self.current_player_idx;
-        PlayerView {
-          id: id.clone(),
-          color_hue: p.color_hue,
-          status: p.status.clone(),
-          is_me,
-          is_online: p.is_online,
-          extra_info: if idx == self.players.len() - 1 {
-            Some("Guesser".to_string())
-          } else {
-            Some(format!("Round {}", idx + 1))
-          },
-          score_display: None,
-          is_active_turn: is_active,
-          answer: None,
+    // Visibility Logic for Bans:
+    // 1. Super/Settled -> All
+    // 2. Player: if my_idx <= current_idx (Past or Current) -> See Bans. Future -> Don't see.
+    // 3. Spectator -> All
+    let mut show_bans = can_see_all;
+    if !show_bans && user_id.is_some() {
+      if let Some(u) = user_id {
+        if let Some(my_idx) = self.players.iter().position(|p| *p == u) {
+          if my_idx <= self.current_idx {
+            show_bans = true;
+          }
+        } else {
+          // Authenticated user but not playing (spectator)
+          show_bans = true;
         }
-      })
-      .collect();
+      }
+    }
 
+    let mut b_i = if show_bans {
+      self.banned_i.iter().cloned().collect()
+    } else {
+      vec![]
+    };
+    let mut b_f = if show_bans {
+      self.banned_f.iter().cloned().collect()
+    } else {
+      vec![]
+    };
+
+    // First describer strict logic: if I am the first describer, show answer bans in the ban list
+    if self.phase == GamePhase::Gaming && self.is_first_describer && user_id.is_some() {
+      if self.players.get(self.current_idx) == user_id.as_ref() {
+        b_i.extend(self.answer_i.clone());
+        b_f.extend(self.answer_f.clone());
+      }
+    }
+    b_i.sort();
+    b_f.sort();
+
+    // History Visibility:
+    // Same logic: Past/Current players see history. Future don't.
     let mut visible_history = vec![];
-    let mut my_prompt = None;
-    let mut is_first_turn = false;
-    let mut is_guessing_turn = false;
+    if can_see_all {
+      visible_history = self.history.clone();
+    } else if let Some(u) = user_id {
+      if let Some(my_idx) = self.players.iter().position(|p| *p == u) {
+        if my_idx <= self.current_idx {
+          visible_history = self.history.clone();
+        }
+      } else {
+        visible_history = self.history.clone();
+      }
+    }
 
-    let me_idx = if let Some(u) = user {
-      self.players.iter().position(|r| r == u)
+    let my_prompt = if user_id.is_some()
+      && self.phase == GamePhase::Gaming
+      && self.players.get(self.current_idx) == user_id.as_ref()
+    {
+      Some(self.current_prompt.clone())
     } else {
       None
     };
 
-    let is_settled = self.phase == GamePhase::Settlement;
-
-    if is_settled || is_super {
-      visible_history = self.history.clone();
-    } else {
-      // 普通玩家视角
-      if let Some(midx) = me_idx {
-        // 如果我已经行动过（在当前玩家之前），我可以看到历史
-        if midx < self.current_player_idx {
-          visible_history = self.history.clone();
-        }
-        // 轮到我了
-        if midx == self.current_player_idx && self.phase == GamePhase::Gaming {
-          my_prompt = Some(self.current_input_prompt.clone());
-          is_first_turn = self.is_first_describer;
-          is_guessing_turn = midx == self.players.len() - 1;
-        }
-      }
-    }
-
-    // 处理 Banned Initials/Finals 的显示逻辑
-    // 规则：
-    // 1. 如果是结算阶段或 Super，显示所有。
-    // 2. 如果是玩家：
-    //    - 如果是过去行动过的玩家 (midx < current) -> 可以看到 Ban 表 (了解情况)
-    //    - 如果是当前行动的玩家 (midx == current) -> 可以看到 Ban 表 (必须知道规则)
-    //    - 如果是未来玩家 (midx > current) -> 只能看到空表 (不透露信息)
-    // 3. 旁观者可以看到所有 (默认)。
-
-    let mut display_banned_i = HashSet::new();
-    let mut display_banned_f = HashSet::new();
-
-    let show_bans = if is_super || is_settled {
-      true
-    } else if let Some(u) = user {
-      // 玩家视角
-      if let Some(midx) = self.players.iter().position(|p| p == u) {
-        // 只有 过去 或 当前 玩家可见
-        midx <= self.current_player_idx
+    let pinyin_state = PinyinSpecificView {
+      all_initials: self.all_i.clone(),
+      all_finals: self.all_f.clone(),
+      banned_initials: b_i,
+      banned_finals: b_f,
+      history: visible_history,
+      my_prompt,
+      is_first_turn: self.is_first_describer,
+      is_guessing_turn: self.players.len() > 0 && self.current_idx == self.players.len() - 1,
+      end_message: if is_settled {
+        Some(if self.winner {
+          "Success".into()
+        } else {
+          "Failed".into()
+        })
       } else {
-        // 非参赛玩家（普通旁观者）可见
-        true
-      }
-    } else {
-      // 匿名旁观者可见
-      true
+        None
+      },
     };
 
-    if show_bans {
-      display_banned_i = self.banned_initials.clone();
-      display_banned_f = self.banned_finals.clone();
-    }
-
-    // 第一棒特殊逻辑：
-    // 如果是第一棒，且请求者正是当前玩家，需要将答案的声韵母混入 ban 列表显示
-    if self.phase == GamePhase::Gaming && self.is_first_describer {
-      if let Some(u) = user {
-        if let Some(curr_id) = self.players.get(self.current_player_idx) {
-          if curr_id == u {
-            display_banned_i.extend(self.answer_initials.clone());
-            display_banned_f.extend(self.answer_finals.clone());
-          }
-        }
-      }
-    }
-
-    ClientView {
-      game_id: self.game_id.clone(),
-      phase: self.phase.clone(),
-      hint: self.hint_text.clone(),
-      players: p_views,
-      deadline_ms: self
-        .turn_deadline
-        .map(|t| t.saturating_duration_since(now).as_millis() as u64),
-      is_super,
-      correct_answer: if is_super || is_settled {
-        Some(self.answer_text.clone())
+    (
+      self.phase,
+      self.hint.clone(),
+      self.turn_deadline,
+      None,
+      Some(pinyin_state),
+      Some(self.winner),
+      if can_see_all {
+        Some(self.answer.clone())
       } else {
         None
       },
-      // Pinyin fields
-      all_initials: Some(self.all_initials.clone()),
-      all_finals: Some(self.all_finals.clone()),
-      banned_initials: Some(display_banned_i.into_iter().collect()),
-      banned_finals: Some(display_banned_f.into_iter().collect()),
-      history: Some(visible_history),
-      my_prompt,
-      is_first_turn: Some(is_first_turn),
-      is_guessing_turn: Some(is_guessing_turn),
-      full_history: if is_settled {
-        Some(self.history.clone())
-      } else {
-        None
-      },
-      winner: if is_settled { Some(self.winner) } else { None },
-      end_message: if is_settled {
-        Some(if self.winner { "Success!" } else { "Failed." }.to_string())
-      } else {
-        None
-      },
-      current_player_id: if self.phase == GamePhase::Gaming
-        && self.current_player_idx < self.players.len()
-      {
-        Some(self.players[self.current_player_idx].clone())
-      } else {
-        None
-      },
-      ..Default::default()
-    }
+    )
   }
 
-  fn get_passwords(&self) -> (String, String) {
-    (self.player_password.clone(), self.super_password.clone())
+  pub fn get_player_state(
+    &self,
+    pid: i64,
+    _user_id: Option<i64>,
+    _show_all: bool,
+  ) -> (PlayerStatus, Option<String>, bool, Option<String>) {
+    let p_status = self
+      .player_data
+      .get(&pid)
+      .map(|p| p.status)
+      .unwrap_or(PlayerStatus::Waiting);
+    let is_active =
+      self.phase == GamePhase::Gaming && self.players.get(self.current_idx) == Some(&pid);
+
+    // In Pinyin, rounds are the score equivalent
+    let round_idx = self.players.iter().position(|p| *p == pid).unwrap_or(0);
+    let role = if round_idx == self.players.len().saturating_sub(1) {
+      "Guesser"
+    } else {
+      "Describer"
+    };
+
+    (p_status, Some(role.to_string()), is_active, None)
   }
 }

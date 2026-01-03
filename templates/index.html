@@ -1,0 +1,104 @@
+{% extends "base.html" %}
+
+{% block content %}
+  <h2 class="ui header">Game Rooms</h2>
+
+  {% match user %}
+    {% when Some with (u) %}
+    {% if u.is_admin() %}
+      <div class="ui segment">
+        <h4 class="ui header">Create New Room</h4>
+        <form class="ui form" action="/room" method="post">
+          <div class="fields">
+            <div class="six wide field">
+              <input type="text" name="name" placeholder="Room Name" required />
+            </div>
+            <div class="four wide field">
+              <select class="ui dropdown" name="rtype">
+                <option value="chain">Chain</option>
+                <option value="pinyin">Pinyin</option>
+              </select>
+            </div>
+            <div class="three wide field">
+              <input
+                type="number"
+                name="max"
+                value="6"
+                placeholder="Max Players"
+                min="1"
+              />
+            </div>
+            <div class="three wide field">
+              <button class="ui button primary fluid" type="submit">
+                Create
+              </button>
+            </div>
+          </div>
+        </form>
+      </div>
+    {% endif %}
+    {% when None %}
+  {% endmatch %}
+
+  <div class="ui three stackable cards">
+    {% for room in rooms %}
+      <div class="card">
+        <div class="content">
+          <div class="header">{{ room.name }}</div>
+          <div class="meta">
+            <span
+              class="ui label {% if room.mode == "chain" %}blue{% else %}orange{% endif %} mini"
+              >{{ room.mode | title }}</span
+            >
+            <span class="ui label basic mini">{{ room.phase | title }}</span>
+          </div>
+          <div class="description">
+            <p>Players: <strong>{{ room.count }}</strong> / {{ room.max }}</p>
+          </div>
+        </div>
+        <div class="extra content">
+          <div class="ui two buttons">
+            <a href="/room/{{ room.id }}" class="ui basic green button">Join</a>
+            <a href="/room/{{ room.id }}/spectate" class="ui basic blue button"
+              >Spectate</a
+            >
+          </div>
+          {% match user %}
+            {% when Some with (u) %}
+            {% if u.is_admin() %}
+              <div style="margin-top: 5px;">
+                <button
+                  class="ui button red fluid"
+                  onclick="deleteRoom('{{ room.id }}')"
+                >
+                  Delete
+                </button>
+              </div>
+            {% endif %}
+            {% when None %}
+          {% endmatch %}
+        </div>
+      </div>
+    {% endfor %}
+  </div>
+
+  {% if rooms.len() == 0 %}
+    <div class="ui placeholder segment">
+      <div class="ui icon header">
+        <i class="coffee icon"></i>
+        No active rooms.
+      </div>
+    </div>
+  {% endif %}
+
+  <script>
+    function deleteRoom(id) {
+      if (confirm("Are you sure you want to delete this room?")) {
+        fetch(`/room/${id}`, { method: "DELETE" }).then((r) => {
+          if (r.ok) window.location.reload();
+          else alert("Failed");
+        });
+      }
+    }
+  </script>
+{% endblock %}

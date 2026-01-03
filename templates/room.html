@@ -1,0 +1,613 @@
+{% extends "base.html" %}
+
+{% block content %}
+  <div id="app-container" data-room-id="{{ room_id }}">
+    <!-- Top Menu -->
+    <div class="ui secondary menu">
+      <a href="/" class="item" onclick="leaveRoom()"
+        ><i class="arrow left icon"></i> Back</a
+      >
+      <div class="item header">
+        <span id="room-name-display">Loading...</span>
+        <span id="room-phase-badge"></span>
+      </div>
+
+      <div class="right menu">
+        <div class="item" id="admin-controls" style="display:none;">
+          <div class="ui buttons">
+            <button class="ui button positive" onclick="openStartModal()">
+              Start
+            </button>
+            <button class="ui button" onclick="stopGame()">Stop</button>
+            <button class="ui button icon" onclick="openOptionsModal()">
+              <i class="cog icon"></i>
+            </button>
+          </div>
+        </div>
+        <div class="item" id="connection-status">
+          <div
+            class="ui yellow empty circular label"
+            title="Connecting..."
+          ></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="ui grid stackable">
+      <!-- Left Sidebar: Players & Logs -->
+      <div class="five wide column">
+        <!-- Player List -->
+        <div class="ui segment">
+          <h4 class="ui header">Players (<span id="player-count">0</span>)</h4>
+          <div class="ui list" id="player-list">
+            <!-- Rendered by JS -->
+          </div>
+        </div>
+
+        <!-- Log Panel -->
+        <div class="ui segment">
+          <h4 class="ui header">Logs</h4>
+          <div
+            class="ui small feed"
+            id="log-feed"
+            style="max-height: 200px; overflow-y: auto;"
+          ></div>
+        </div>
+
+        <!-- Hint Area -->
+        <div
+          class="ui message info"
+          id="hint-segment"
+          style="display:none; margin-top: 1em;"
+        >
+          <div class="header">Hint</div>
+          <p id="hint-text"></p>
+        </div>
+      </div>
+
+      <!-- Main Game Area -->
+      <div class="eleven wide column">
+        <!-- Workspace -->
+        <div
+          class="ui segment"
+          id="game-workspace"
+          style="min-height: 500px; display: flex; flex-direction: column;"
+        >
+          <!-- Placeholder -->
+          <div id="wait-view" class="ui placeholder segment" style="flex: 1;">
+            <div class="ui icon header">
+              <i class="clock outline icon"></i>
+              <span id="wait-text">Waiting for game start...</span>
+            </div>
+          </div>
+
+          <!-- Chain View -->
+          <div id="chain-view" style="display:none;">
+            <div class="char-grid" id="chain-grid"></div>
+          </div>
+
+          <!-- Pinyin View -->
+          <div id="pinyin-view" style="display:none;">
+            <h4 class="ui header small">Initials</h4>
+            <div class="py-grid" id="py-initials"></div>
+            <h4 class="ui header small">Finals</h4>
+            <div class="py-grid" id="py-finals"></div>
+            <div class="ui divider"></div>
+            <h4 class="ui header small">History</h4>
+            <div
+              class="history-box"
+              id="py-history"
+              style="max-height: 250px;"
+            ></div>
+          </div>
+
+          <!-- Controls (Integrated inside workspace, bottom) -->
+          <div
+            id="game-controls"
+            style="margin-top: 20px; border-top: 1px solid #eee; padding-top: 20px; display:none;"
+          >
+            <!-- Dynamic Buttons/Inputs -->
+          </div>
+
+          <!-- Results -->
+          <div
+            id="result-area"
+            class="ui message"
+            style="display:none; margin-top: 20px;"
+          ></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Start Modal -->
+  <div class="ui modal" id="modal-start">
+    <div class="header">Start Game</div>
+    <div class="content">
+      <form class="ui form">
+        <div class="field" id="field-prob">
+          <label>Problem Text</label>
+          <textarea
+            id="inp-prob"
+            rows="3"
+            placeholder="Full text..."
+          ></textarea>
+        </div>
+        <div class="two fields">
+          <div class="field">
+            <label>Correct Answer</label>
+            <input type="text" id="inp-ans" />
+          </div>
+          <div class="field">
+            <label>Hint</label>
+            <input type="text" id="inp-hint" />
+          </div>
+        </div>
+      </form>
+    </div>
+    <div class="actions">
+      <div class="ui button cancel">Cancel</div>
+      <div class="ui button primary" onclick="doStart()">Start</div>
+    </div>
+  </div>
+
+  <!-- Options Modal -->
+  <div class="ui modal" id="modal-options">
+    <div class="header">Room Options</div>
+    <div class="content">
+      <form class="ui form">
+        <div class="field">
+          <label>Room Name</label>
+          <input type="text" id="opt-name" />
+        </div>
+        <div class="field">
+          <label>Max Players</label>
+          <input type="number" id="opt-max" />
+        </div>
+        <div class="field">
+          <label>Admin User IDs (comma separated)</label>
+          <input type="text" id="opt-admins" />
+        </div>
+      </form>
+    </div>
+    <div class="actions">
+      <div class="ui button red" onclick="doDeleteRoom()">Delete Room</div>
+      <div class="ui button cancel">Cancel</div>
+      <div class="ui button blue" onclick="doUpdateOptions()">Save</div>
+    </div>
+  </div>
+
+  <style>
+    .admin-answer {
+      display: block;
+      color: #db2828;
+      font-weight: bold;
+      font-size: 0.9em;
+      margin-top: 2px;
+    }
+
+    /* Grid & Game Styles */
+    .char-grid {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+    }
+    .char-cell {
+      width: 40px;
+      height: 40px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid #ddd;
+      background: #fff;
+      font-weight: bold;
+      font-size: 1.2rem;
+      border-radius: 3px;
+    }
+    .py-grid {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      margin-bottom: 0.5em;
+    }
+    .py-tag {
+      font-family: monospace;
+      font-size: 1em;
+      padding: 4px 8px !important;
+    }
+
+    .history-box {
+      overflow-y: auto;
+      background: #f9f9f9;
+      border: 1px solid #eee;
+      padding: 8px;
+      border-radius: 4px;
+    }
+  </style>
+
+  <script>
+    const ROOM_ID = "{{ room_id }}";
+    const IS_SPECTATE = "{{ is_spectate }}" === "true";
+    const IS_ADMIN_VIEW = "{{ is_admin }}" === "true";
+
+    let ws = null;
+    let gameState = null;
+    let localDeadline = 0; // Absolute timestamp
+    let timerInterval = null;
+
+    function leaveRoom() {
+      if (ws) {
+        ws.close();
+        ws = null;
+      }
+      window.location.href = "/";
+    }
+
+    function connect() {
+      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+      let url = `${protocol}//${window.location.host}/ws?room=${ROOM_ID}`;
+      if (IS_SPECTATE) url += "&spectate=true";
+
+      ws = new WebSocket(url);
+
+      ws.onopen = () => {
+        $("#connection-status div")
+          .removeClass("yellow red")
+          .addClass("green")
+          .attr("title", "Connected");
+        if (!timerInterval) timerInterval = setInterval(updateTimerUI, 100);
+      };
+
+      ws.onclose = () => {
+        // Only reconnect if not intentionally left
+        if (ws !== null) {
+          $("#connection-status div")
+            .removeClass("green yellow")
+            .addClass("red")
+            .attr("title", "Disconnected");
+          setTimeout(connect, 2000);
+        }
+      };
+
+      ws.onmessage = (e) => {
+        const payload = JSON.parse(e.data);
+        if (payload.type === "update") {
+          gameState = payload.data;
+          // Update local deadline reference
+          if (gameState.deadline_ms != null) {
+            localDeadline = Date.now() + gameState.deadline_ms;
+          } else {
+            localDeadline = 0;
+          }
+          render();
+        } else if (payload.type === "log") {
+          log(payload.data.who, payload.data.text, payload.data.time);
+        } else if (payload.type === "toast") {
+          $("body").toast({
+            message: payload.data.msg,
+            class: payload.data.kind === "error" ? "error" : "success",
+          });
+        }
+      };
+    }
+
+    function log(who, text, time) {
+      const box = $("#log-feed");
+      box.append(
+        `<div class="event"><div class="content"><div class="summary"><a class="user">${who}</a> ${text}<div class="date">${time}</div></div></div></div>`,
+      );
+      box.scrollTop(box[0].scrollHeight);
+    }
+
+    function sendAction(act) {
+      ws.send(JSON.stringify({ type: "Action", data: { action: act } }));
+    }
+    function sendAnswer() {
+      const val = $("#inp-answer").val();
+      if (val)
+        ws.send(JSON.stringify({ type: "Answer", data: { content: val } }));
+    }
+
+    // --- Rendering ---
+    function render() {
+      // 1. Header
+      $("#room-name-display").text(gameState.room_name);
+      let phaseColor =
+        gameState.phase === "gaming" ||
+        gameState.phase === "picking" ||
+        gameState.phase === "answering"
+          ? "green"
+          : "grey";
+      $("#room-phase-badge").html(
+        `<div class="ui label ${phaseColor}" style="margin-left: 1em;">
+          ${_.startCase(gameState.phase)}
+        </div>`,
+      );
+
+      // Admin buttons
+      if (gameState.is_admin) {
+        $("#admin-controls").show();
+      }
+
+      if (gameState.hint) {
+        $("#hint-segment").show();
+        $("#hint-text").text(gameState.hint);
+      } else {
+        $("#hint-segment").hide();
+      }
+
+      // 2. Player List
+      const list = $("#player-list");
+      list.empty();
+      $("#player-count").text(gameState.players.length);
+
+      gameState.players.forEach((p) => {
+        // Status Dot Color
+        let dotColor = p.is_online ? `hsl(${p.color_hue}, 70%, 50%)` : "grey";
+
+        // Item
+        const item = $(
+          `<div class="item" style="display: flex; align-items: center;"></div>`,
+        );
+
+        // Avatar/Dot
+        const dot = $(
+          `<div class="ui mini empty circular label" style="margin: 0 0.8em 0 0; background-color: ${dotColor};"></div>`,
+        );
+
+        // Content
+        const content = $(`<div class="content" style="width: 100%;"></div>`);
+
+        // Header (Name + Badges)
+        let headerHtml = `<span class="header">${p.id}</span>`;
+        if (p.is_me)
+          headerHtml += ` <div class="ui mini label blue basic">ME</div>`;
+        if (p.is_spectator)
+          headerHtml += ` <div class="ui mini label grey basic">SPEC</div>`;
+
+        if (p.is_active_turn) item.addClass(["active", "teal"]);
+
+        const headerDiv = $(`<div style="display:flex;">${headerHtml}</div>`);
+
+        content.append(headerDiv);
+
+        // Description (Status + Admin Answer)
+        let descText = _.startCase(p.status);
+
+        let descHtml = `<div class="description" style="font-size:0.9em; color: #888;">${descText}</div>`;
+
+        // Admin seeing answer
+        if (p.answer) {
+          descHtml += `<span class="admin-answer">Ans: ${p.answer}</span>`;
+        }
+
+        content.append(descHtml);
+
+        item.append(dot).append(content);
+
+        // Score (Right side)
+        if (p.score_display) {
+          item.append(
+            `<div style="font-weight:bold; color: #2185d0;">${p.score_display}</div>`,
+          );
+        }
+
+        list.append(item);
+      });
+
+      // 3. Game Views
+      $("#chain-view").hide();
+      $("#pinyin-view").hide();
+      $("#wait-view").hide();
+      $("#result-area").hide();
+      $("#game-controls").hide();
+
+      if (gameState.phase === "settlement") {
+        renderSettlement();
+      } else if (gameState.room_type === "chain" && gameState.grid) {
+        $("#chain-view").show();
+        renderChainGrid(gameState.grid);
+        renderControls();
+      } else if (gameState.room_type === "pinyin" && gameState.pinyin_state) {
+        $("#pinyin-view").show();
+        renderPinyin(gameState.pinyin_state);
+        renderControls();
+      } else {
+        $("#wait-view").show();
+        $("#wait-text").text("Waiting for game to start...");
+      }
+    }
+
+    function renderSettlement() {
+      $("#result-area").show();
+      const won = gameState.winner === true;
+      const color = won ? "positive" : "negative";
+      let html = `<div class="header">${won ? "Game Success" : "Game Over"}</div>`;
+      if (gameState.correct_answer) {
+        html += `<p style="font-size:1.2em">Answer: <strong>${gameState.correct_answer}</strong></p>`;
+      }
+      if (gameState.pinyin_state && gameState.pinyin_state.end_message) {
+        html += `<p>${gameState.pinyin_state.end_message}</p>`;
+      }
+      $("#result-area")
+        .removeClass("positive negative")
+        .addClass(color)
+        .html(html);
+
+      // Show state bg
+      if (gameState.room_type === "chain" && gameState.grid) {
+        $("#chain-view").show();
+        renderChainGrid(gameState.grid);
+      }
+      if (gameState.room_type === "pinyin" && gameState.pinyin_state) {
+        $("#pinyin-view").show();
+        renderPinyin(gameState.pinyin_state);
+      }
+    }
+
+    function renderChainGrid(grid) {
+      const el = $("#chain-grid").empty();
+      grid.forEach((cell) => {
+        const div = $(`<div class="char-cell"></div>`);
+        if (cell.char_content) div.text(cell.char_content);
+        if (cell.owner_color_hue != null) {
+          div.css({
+            "background-color": `hsl(${cell.owner_color_hue}, 70%, 90%)`,
+            "border-color": `hsl(${cell.owner_color_hue}, 60%, 70%)`,
+            color: `hsl(${cell.owner_color_hue}, 80%, 30%)`,
+          });
+        } else {
+          div.css({ "background-color": "#f3f3f3", color: "#ccc" });
+        }
+        el.append(div);
+      });
+    }
+
+    function renderPinyin(ps) {
+      const tag = (txt, ban) =>
+        `<span class="ui label py-tag ${ban ? "red" : "basic"}">${txt}</span>`;
+      const ri = $("#py-initials").empty();
+      const rf = $("#py-finals").empty();
+      ps.all_initials.forEach((t) =>
+        ri.append(tag(t, ps.banned_initials.includes(t))),
+      );
+      ps.all_finals.forEach((t) =>
+        rf.append(tag(t, ps.banned_finals.includes(t))),
+      );
+
+      const h = $("#py-history").empty();
+      ps.history.forEach((item) => {
+        h.append(
+          `<div style="margin-bottom:4px;"><strong>${item.player}:</strong> ${item.content} ${item.is_guess ? "(Guess)" : ""}</div>`,
+        );
+      });
+      // Scroll to bottom
+      h.scrollTop(h[0].scrollHeight);
+    }
+
+    function renderControls() {
+      if (IS_SPECTATE) return; // Spectators don't see controls
+      const me = gameState.players.find((p) => p.is_me);
+      if (!me || me.is_spectator) return; // "Playing" Admins see controls, Spectating Admins don't
+
+      const controls = $("#game-controls");
+      controls.empty();
+
+      if (gameState.room_type === "chain") {
+        if (me.status === "picking") {
+          controls.show().html(`
+          <div class="ui buttons fluid">
+             <button class="ui button blue" onclick="sendAction('take')">Take <span class="timer-lbl"></span></button>
+             <div class="or"></div>
+             <button class="ui button red" onclick="sendAction('stop')">Stop</button>
+          </div>
+        `);
+        } else if (
+          me.status === "answering" ||
+          (gameState.phase === "answering" && me.status !== "submitted")
+        ) {
+          controls.show().html(`
+           <div class="ui action input fluid">
+             <input type="text" id="inp-answer" placeholder="Answer...">
+             <button class="ui button green" onclick="sendAnswer()">Submit <span class="timer-lbl"></span></button>
+           </div>
+        `);
+        }
+      } else if (gameState.room_type === "pinyin") {
+        if (me.is_active_turn) {
+          const isGuess = gameState.pinyin_state.is_guessing_turn;
+          const prompt = gameState.pinyin_state.my_prompt || "";
+          controls.show().html(`
+            <div class="ui action input fluid">
+               <input type="text" id="inp-answer" value="${!isGuess ? prompt : ""}" placeholder="${isGuess ? "Final Guess..." : "Char..."}" autocomplete="off">
+               <button class="ui button blue" onclick="sendAnswer()">${isGuess ? "Guess" : "Submit"} <span class="timer-lbl"></span></button>
+            </div>
+            ${!isGuess && gameState.pinyin_state.is_first_turn ? '<div style="color:orange; font-size:0.9em; margin-top:5px;">First Turn: No answer components allowed.</div>' : ""}
+          `);
+          $("#inp-answer").focus();
+        } else {
+          controls
+            .show()
+            .html(`<div class="ui message info">Waiting for others...</div>`);
+        }
+      }
+    }
+
+    function updateTimerUI() {
+      if (localDeadline > 0) {
+        const diff = Math.max(0, localDeadline - Date.now()) / 1000;
+        if (diff > 0) {
+          $(".timer-lbl").text(`(${diff.toFixed(1)}s)`);
+        } else {
+          $(".timer-lbl").text("");
+        }
+      } else {
+        $(".timer-lbl").text("");
+      }
+    }
+
+    // --- Admin ---
+    function openStartModal() {
+      if (gameState.room_type === "pinyin") {
+        $("#field-prob").hide();
+      } else {
+        $("#field-prob").show();
+      }
+      $("#inp-prob").val("");
+      $("#inp-ans").val("");
+      $("#inp-hint").val("");
+      $("#modal-start").modal("show");
+    }
+
+    function doStart() {
+      const body = {
+        problem: $("#inp-prob").val(),
+        answer: $("#inp-ans").val(),
+        hint: $("#inp-hint").val(),
+      };
+      fetch(`/room/${ROOM_ID}/start`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      }).then(() => $("#modal-start").modal("hide"));
+    }
+
+    function stopGame() {
+      if (confirm("Stop Game?"))
+        fetch(`/room/${ROOM_ID}/stop`, { method: "POST" });
+    }
+
+    function openOptionsModal() {
+      $("#opt-name").val(gameState.room_name);
+      $("#opt-max").val(gameState.max_players);
+      $("#opt-admins").val(gameState.admin_ids.join(","));
+      $("#modal-options").modal("show");
+    }
+
+    function doUpdateOptions() {
+      const body = {
+        name: $("#opt-name").val(),
+        max: parseInt($("#opt-max").val()),
+        admins: $("#opt-admins")
+          .val()
+          .split(",")
+          .map((s) => parseInt(s.trim()))
+          .filter((s) => !isNaN(s)),
+      };
+      fetch(`/room/${ROOM_ID}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      }).then(() => $("#modal-options").modal("hide"));
+    }
+
+    function doDeleteRoom() {
+      if (confirm("DELETE?"))
+        fetch(`/room/${ROOM_ID}`, { method: "DELETE" }).then(
+          () => (window.location = "/"),
+        );
+    }
+
+    $(document).ready(connect);
+  </script>
+{% endblock %}
