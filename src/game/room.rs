@@ -58,7 +58,7 @@ impl Room {
     username: String,
     is_spectator: bool,
     is_site_admin: bool,
-  ) -> broadcast::Receiver<InternalMsg> {
+  ) -> Result<broadcast::Receiver<InternalMsg>, String> {
     let rx = self.tx.subscribe();
     let now = Instant::now();
 
@@ -72,35 +72,49 @@ impl Room {
       // Update spectator/admin status on rejoin
       p.is_spectator = is_spectator;
       p.is_admin = is_room_admin;
-      let _ = self.tx.send(InternalMsg::Log {
-        who: "System".into(),
-        text: format!("{} reconnected", username),
-        time: chrono::Local::now().format("%H:%M:%S").to_string(),
-      });
+      if !is_spectator {
+        let _ = self.tx.send(InternalMsg::Log {
+          who: "System".into(),
+          text: format!("{} reconnected", username),
+          time: chrono::Local::now().format("%H:%M:%S").to_string(),
+        });
+      }
     } else {
       // New Join
-      if is_spectator
-        || self.players.iter().filter(|p| !p.1.is_spectator).count() < self.max_players
-        || is_room_admin
-      {
-        self.players.insert(
-          user_id.clone(),
-          RoomPlayer {
-            id: user_id.clone(),
-            name: username.clone(),
-            is_online: true,
-            is_spectator,
-            is_admin: is_room_admin,
-            last_seen: now,
-          },
-        );
-        if !is_spectator {
-          let _ = self.tx.send(InternalMsg::Log {
-            who: "System".into(),
-            text: format!("{} joined", username),
-            time: chrono::Local::now().format("%H:%M:%S").to_string(),
-          });
-        }
+      let game_in_progress = match &self.session {
+        GameSession::None => false,
+        GameSession::Chain(g) => g.phase != GamePhase::Settlement,
+        GameSession::Pinyin(g) => g.phase != GamePhase::Settlement,
+      };
+
+      if !is_spectator && game_in_progress {
+        return Err("Game is in progress".to_string());
+      }
+
+      let current_count = self.players.iter().filter(|p| !p.1.is_spectator).count();
+
+      // Check Capacity
+      if !is_spectator && current_count >= self.max_players {
+        return Err("Room is full".to_string());
+      }
+
+      self.players.insert(
+        user_id.clone(),
+        RoomPlayer {
+          id: user_id.clone(),
+          name: username.clone(),
+          is_online: true,
+          is_spectator,
+          is_admin: is_room_admin,
+          last_seen: now,
+        },
+      );
+      if !is_spectator {
+        let _ = self.tx.send(InternalMsg::Log {
+          who: "System".into(),
+          text: format!("{} joined", username),
+          time: chrono::Local::now().format("%H:%M:%S").to_string(),
+        });
       }
     }
 
@@ -111,7 +125,7 @@ impl Room {
     }
 
     let _ = self.tx.send(InternalMsg::StateUpdated);
-    rx
+    Ok(rx)
   }
 
   pub fn leave(&mut self, user_id: i64) {
@@ -119,14 +133,20 @@ impl Room {
 
     if is_waiting {
       // 如果还在等待阶段，直接移除玩家，避免幽灵
-      if self.players.remove(&user_id).is_some() {
-        // Send generic update
-      }
+      let _ = self.players.remove(&user_id);
     } else {
-      // 游戏进行中，标记为离线
-      if let Some(p) = self.players.get_mut(&user_id) {
+      let is_spectator = self.players.get(&user_id).map_or(false, |p| p.is_spectator);
+      if is_spectator {
+        let _ = self.players.remove(&user_id);
+      } else if let Some(p) = self.players.get_mut(&user_id) {
+        // 游戏进行中，标记为离线
         p.is_online = false;
         p.last_seen = Instant::now();
+        let _ = self.tx.send(InternalMsg::Log {
+          who: "System".into(),
+          text: format!("{} left room", &p.name),
+          time: chrono::Local::now().format("%H:%M:%S").to_string(),
+        });
       }
     }
 
@@ -135,6 +155,19 @@ impl Room {
       GameSession::Pinyin(g) => g.handle_leave(user_id, &self.tx),
       _ => {}
     }
+    let _ = self.tx.send(InternalMsg::StateUpdated);
+  }
+
+  pub fn kick(&mut self, user_id: i64) {
+    // 1. 先执行离开逻辑，更新游戏内状态（如跳过回合）
+    self.leave(user_id);
+
+    // 2. 从房间玩家列表中彻底移除 (防止 leave 逻辑仅仅标记为离线)
+    self.players.remove(&user_id);
+
+    // 3. 广播踢人消息，触发 WS 断开
+    let _ = self.tx.send(InternalMsg::Kick { target: user_id });
+
     let _ = self.tx.send(InternalMsg::StateUpdated);
   }
 

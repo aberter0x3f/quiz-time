@@ -62,6 +62,7 @@ pub fn app(state: Arc<AppState>) -> Router {
       "/room/{id}",
       get(enter_room).put(update_room).delete(delete_room),
     )
+    .route("/room/{id}/kick", post(kick_player))
     .route("/room/{id}/spectate", get(spectate_room))
     .route("/room/{id}/start", post(start_game))
     .route("/room/{id}/stop", post(stop_game))
@@ -302,6 +303,28 @@ async fn delete_room(
 }
 
 #[derive(serde::Deserialize)]
+struct KickPlayerJson {
+  user_id: i64,
+}
+
+async fn kick_player(
+  State(state): State<Arc<AppState>>,
+  Path(id): Path<Uuid>,
+  axum::Extension(user): axum::Extension<User>,
+  Json(payload): Json<KickPlayerJson>,
+) -> impl IntoResponse {
+  if let Some(r_lock) = state.rooms.get(&id) {
+    let mut room = r_lock.write().await;
+    // Check admin permissions
+    if !room.admin_ids.contains(&user.id) && user.role != Role::Admin {
+      return StatusCode::FORBIDDEN;
+    }
+    room.kick(payload.user_id);
+  }
+  StatusCode::OK
+}
+
+#[derive(serde::Deserialize)]
 struct StartGameJson {
   problem: String,
   answer: String,
@@ -320,9 +343,9 @@ async fn start_game(
       return StatusCode::FORBIDDEN.into_response();
     }
     room.start_game(
-      payload.problem,
-      payload.answer,
-      payload.hint,
+      payload.problem.trim_end().to_string(),
+      payload.answer.trim().to_string(),
+      payload.hint.trim().to_string(),
       state.pinyin_table.clone(),
     );
   }

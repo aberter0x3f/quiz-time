@@ -4,7 +4,7 @@ use crate::state::AppState;
 use axum::{
   extract::{
     Query, State,
-    ws::{Message, WebSocket, WebSocketUpgrade},
+    ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade},
   },
   response::IntoResponse,
 };
@@ -47,13 +47,23 @@ async fn handle_socket(
       None => return,
     };
     let mut room = r_lock.write().await;
-    let rx = room.join(
+    match room.join(
       user.id.clone(),
       user.name.clone(),
       req_spectate,
       user.is_admin(),
-    );
-    (rx, room.tx.clone())
+    ) {
+      Ok(rx) => (rx, room.tx.clone()),
+      Err(e) => {
+        let _ = sender
+          .send(Message::Close(Some(CloseFrame {
+            code: 4000,
+            reason: e.into(),
+          })))
+          .await;
+        return;
+      }
+    }
   };
 
   let mut broadcast_rx = rx;
@@ -113,6 +123,15 @@ async fn handle_socket(
               if sender.send(Message::text(json.to_string())).await.is_err() { break; }
             }
           },
+          InternalMsg::Kick { target } => {
+            if target == user.id {
+              let _ = sender.send(Message::Close(Some(CloseFrame {
+                code: 4001,
+                reason: "You have been kicked".into(),
+              }))).await;
+              break; // Break the loop to close connection
+            }
+          }
         }
       }
     }

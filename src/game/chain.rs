@@ -70,7 +70,7 @@ impl ChainGame {
     self.turn_deadline = Some(Instant::now() + Duration::from_secs(3));
     let _ = tx.send(InternalMsg::Log {
       who: "System".into(),
-      text: "Chain Game Started".into(),
+      text: "Chain game started".into(),
       time: Local::now().format("%H:%M:%S").to_string(),
     });
   }
@@ -84,7 +84,7 @@ impl ChainGame {
         self.perform_take(tx);
       } else if action == "stop" {
         if let Some(p) = self.player_data.get_mut(&pid) {
-          p.status = PlayerStatus::Stopped;
+          p.status = PlayerStatus::Answering;
         }
         self.send_log(tx, "Action", format!("{} stopped", pid));
         self.advance_turn(tx);
@@ -94,21 +94,19 @@ impl ChainGame {
 
   pub fn handle_answer(&mut self, pid: i64, content: String, tx: &broadcast::Sender<InternalMsg>) {
     let can_answer = if let Some(p) = self.player_data.get(&pid) {
-      self.phase == GamePhase::Answering
-        || (self.phase == GamePhase::Picking && p.status == PlayerStatus::Stopped)
+      p.status == PlayerStatus::Answering
+        || (self.phase == GamePhase::Answering && p.status != PlayerStatus::Submitted)
     } else {
       false
     };
 
     if can_answer {
       if let Some(p) = self.player_data.get_mut(&pid) {
-        if p.status != PlayerStatus::Submitted {
-          p.answer = Some(content);
-          p.status = PlayerStatus::Submitted;
-          self.send_log(tx, "System", format!("{} submitted answer", pid));
-          self.check_all_submitted(tx);
-          let _ = tx.send(InternalMsg::StateUpdated);
-        }
+        p.answer = Some(content);
+        p.status = PlayerStatus::Submitted;
+        self.send_log(tx, "System", format!("{} submitted answer", pid));
+        self.check_all_submitted(tx);
+        let _ = tx.send(InternalMsg::StateUpdated);
       }
     }
   }
@@ -133,7 +131,8 @@ impl ChainGame {
         if self.phase == GamePhase::Picking && self.players.get(self.current_turn_idx) == Some(&pid)
         {
           if let Some(p) = self.player_data.get_mut(&pid) {
-            p.status = PlayerStatus::Stopped;
+            // Change: Offline/Timeout user moves to answering (effectively skipped)
+            p.status = PlayerStatus::Answering;
           }
           self.advance_turn(tx);
         }
@@ -161,7 +160,8 @@ impl ChainGame {
     let curr_pid = self.players[self.current_turn_idx].clone();
     if self.cursor >= self.problem_text.len() {
       if let Some(p) = self.player_data.get_mut(&curr_pid) {
-        p.status = PlayerStatus::Stopped;
+        // Change: Run out of chars -> Answering
+        p.status = PlayerStatus::Answering;
       }
       self.advance_turn(tx);
       return;
@@ -177,6 +177,8 @@ impl ChainGame {
   fn advance_turn(&mut self, tx: &broadcast::Sender<InternalMsg>) {
     let mut next_idx = (self.current_turn_idx + 1) % self.players.len();
     let mut found = false;
+
+    // Look for next waiting player
     for _ in 0..self.players.len() {
       let pid = &self.players[next_idx];
       if let Some(p) = self.player_data.get(pid) {
@@ -188,6 +190,7 @@ impl ChainGame {
       next_idx = (next_idx + 1) % self.players.len();
     }
 
+    // Check how many are left waiting
     let waiting_count = self
       .player_data
       .values()
@@ -195,8 +198,10 @@ impl ChainGame {
       .count();
 
     if !found {
+      // Everyone has had a turn
       self.enter_answering(tx);
     } else if waiting_count == 1 {
+      // Last person takes all remaining
       let last_pid = self.players[next_idx].clone();
       let remaining = self.problem_text.len() - self.cursor;
       if remaining > 0 {
@@ -208,10 +213,12 @@ impl ChainGame {
         self.cursor += remaining;
       }
       if let Some(p) = self.player_data.get_mut(&last_pid) {
-        p.status = PlayerStatus::Stopped;
+        // Change: Last person finished -> Answering
+        p.status = PlayerStatus::Answering;
       }
       self.enter_answering(tx);
     } else {
+      // Normal turn passing
       self.current_turn_idx = next_idx;
       let next_pid = self.players[next_idx].clone();
       if let Some(p) = self.player_data.get_mut(&next_pid) {
@@ -226,21 +233,32 @@ impl ChainGame {
     self.phase = GamePhase::Answering;
     self.turn_deadline = None;
     self.answer_deadline = Some(Instant::now() + Duration::from_secs(60));
+
+    // Transition anyone who isn't already submitted/answering (e.g. Stopped, though logic above handles that)
+    // to Answering state.
     for p in self.player_data.values_mut() {
       if p.status != PlayerStatus::Submitted {
         p.status = PlayerStatus::Answering;
       }
     }
     self.send_log(tx, "System", "Picking ended. 60s to answer".into());
+    // Also check immediately, in case everyone already submitted early
+    self.check_all_submitted(tx);
     let _ = tx.send(InternalMsg::StateUpdated);
   }
 
   fn check_all_submitted(&mut self, tx: &broadcast::Sender<InternalMsg>) {
-    if self
-      .player_data
-      .values()
-      .all(|p| p.status == PlayerStatus::Submitted)
-    {
+    // If everyone in the player list has submitted, end the game.
+    // We check `self.players` to ensure we only count actual game participants.
+    let all_submitted = self.players.iter().all(|pid| {
+      if let Some(p) = self.player_data.get(pid) {
+        p.status == PlayerStatus::Submitted
+      } else {
+        false // Should not happen
+      }
+    });
+
+    if all_submitted {
       self.finish_game(tx);
     }
   }
@@ -338,7 +356,15 @@ impl ChainGame {
       let is_active =
         self.phase == GamePhase::Picking && self.players.get(self.current_turn_idx) == Some(&pid);
       let score = format!("{}", p.obtained_indices.len());
-      let show_ans = show_all || self.phase == GamePhase::Settlement || user_id == Some(pid);
+      let show_ans = show_all
+        || self.phase == GamePhase::Settlement
+        || user_id == Some(pid)
+        || user_id.map_or(false, |u| {
+          self
+            .player_data
+            .get(&u)
+            .map_or(false, |p| p.status == PlayerStatus::Submitted)
+        });
       let ans = if show_ans { p.answer.clone() } else { None };
 
       (p.status, Some(score), is_active, ans)

@@ -109,7 +109,7 @@ impl PinyinGame {
     self.turn_deadline = Some(Instant::now() + Duration::from_secs(180));
     let _ = tx.send(InternalMsg::Log {
       who: "System".into(),
-      text: "Pinyin Game Started".into(),
+      text: "Pinyin game started".into(),
       time: Local::now().format("%H:%M:%S").to_string(),
     });
   }

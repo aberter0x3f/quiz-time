@@ -32,7 +32,6 @@ pub enum PlayerStatus {
   #[default]
   Waiting,
   Picking,   // Chain: active picker, Pinyin: active describer
-  Stopped,   // Chain specific
   Answering, // Chain specific
   Submitted,
 }
@@ -49,6 +48,9 @@ pub enum InternalMsg {
     to_user: i64,
     msg: String,
     kind: String,
+  },
+  Kick {
+    target: i64,
   },
 }
 

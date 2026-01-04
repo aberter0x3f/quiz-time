@@ -67,11 +67,14 @@
 
       <!-- Main Game Area -->
       <div class="eleven wide column">
-        <!-- Workspace -->
+        <!-- Workspace:
+          Fixed height relative to viewport to ensure controls stick to bottom
+          and content scrolls inside.
+        -->
         <div
           class="ui segment"
           id="game-workspace"
-          style="min-height: 500px; display: flex; flex-direction: column;"
+          style="height: 75vh; display: flex; flex-direction: column; padding-bottom: 0; overflow: hidden;"
         >
           <!-- Placeholder -->
           <div id="wait-view" class="ui placeholder segment" style="flex: 1;">
@@ -81,13 +84,19 @@
             </div>
           </div>
 
-          <!-- Chain View -->
-          <div id="chain-view" style="display:none;">
+          <!-- Chain View (Scrollable) -->
+          <div
+            id="chain-view"
+            style="display:none; flex: 1; overflow-y: auto; padding-bottom: 1em;"
+          >
             <div class="char-grid" id="chain-grid"></div>
           </div>
 
-          <!-- Pinyin View -->
-          <div id="pinyin-view" style="display:none;">
+          <!-- Pinyin View (Scrollable) -->
+          <div
+            id="pinyin-view"
+            style="display:none; flex: 1; overflow-y: auto; padding-bottom: 1em;"
+          >
             <h4 class="ui header small">Initials</h4>
             <div class="py-grid" id="py-initials"></div>
             <h4 class="ui header small">Finals</h4>
@@ -97,15 +106,15 @@
             <div
               class="history-box"
               id="py-history"
-              style="max-height: 250px;"
+              style="max-height: none;"
             ></div>
           </div>
 
-          <!-- Controls (Integrated inside workspace, bottom) -->
+          <!-- Controls (Sticky Bottom via Flexbox) -->
           <div
             id="game-controls"
             data-ctype="none"
-            style="margin-top: 20px; border-top: 1px solid #eee; padding-top: 20px; display:none;"
+            style="flex-shrink: 0; padding-top: 15px; padding-bottom: 15px; border-top: 1px solid #eee; background: #fff; display:none;"
           >
             <!-- Dynamic Buttons/Inputs -->
           </div>
@@ -114,7 +123,7 @@
           <div
             id="result-area"
             class="ui message"
-            style="display:none; margin-top: 20px;"
+            style="display:none; margin-top: 10px; flex-shrink: 0;"
           ></div>
         </div>
       </div>
@@ -218,7 +227,7 @@
     }
 
     .history-box {
-      overflow-y: auto;
+      /* Handled by flex parent now, but keep generic styles */
       background: #f9f9f9;
       border: 1px solid #eee;
       padding: 8px;
@@ -259,14 +268,25 @@
         if (!timerInterval) timerInterval = setInterval(updateTimerUI, 100);
       };
 
-      ws.onclose = () => {
-        // Only reconnect if not intentionally left
-        if (ws !== null) {
-          $("#connection-status div")
-            .removeClass("green yellow")
-            .addClass("red")
-            .attr("title", "Disconnected");
-          setTimeout(connect, 2000);
+      ws.onclose = (e) => {
+        $("#connection-status div")
+          .removeClass("green yellow")
+          .addClass("red")
+          .attr("title", "Disconnected");
+
+        // 4000 is custom code for logic error (e.g. room full)
+        if (e.code === 4000) {
+          alert(e.reason || "Disconnected");
+          window.location.href = "/";
+        } else if (e.code === 4001) {
+          // Kicked
+          alert("You have been kicked from the room.");
+          window.location.href = "/";
+        } else {
+          // Only reconnect if not intentionally left
+          if (ws !== null) {
+            setTimeout(connect, 2000);
+          }
         }
       };
 
@@ -371,6 +391,15 @@
         const leftPart = $(
           `<div style="display: flex; align-items: center; flex-grow: 1;"></div>`,
         );
+
+        // Kick Button (Admin only, not self)
+        if (gameState.is_admin) {
+          leftPart.append(`
+            <i class="times icon red" style="cursor: pointer; margin-right: 0.5em;"
+              onclick="kickPlayer(${p.id}, '${_.escape(p.name)}')"
+              title="Kick Player"></i>
+          `);
+        }
 
         // Avatar/Dot
         const dot = $(
@@ -662,6 +691,16 @@
         fetch(`/room/${ROOM_ID}`, { method: "DELETE" }).then(
           () => (window.location = "/"),
         );
+    }
+
+    function kickPlayer(id, name) {
+      if (confirm(`Kick ${name}?`)) {
+        fetch(`/room/${ROOM_ID}/kick`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ user_id: id }),
+        });
+      }
     }
 
     $(document).ready(connect);
