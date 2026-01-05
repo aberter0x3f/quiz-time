@@ -11,12 +11,10 @@ axum = { version = "0.8", features = ["macros", "ws"] }
 axum-extra = { version = "0.12", features = ["query"] }
 base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
-clap = { version = "4", features = ["derive"] }
 dashmap = "6"
+flate2 = "1"
 futures = "0.3"
-headers = "0.4"
 jsonwebtoken = { version = "10", features = ["aws_lc_rs"] }
-mime = "0.3"
 oauth2 = "5"
 rand = "0.8"
 regex = "1"

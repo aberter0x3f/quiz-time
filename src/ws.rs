@@ -8,8 +8,14 @@ use axum::{
   },
   response::IntoResponse,
 };
+use flate2::Compression;
+use flate2::write::GzEncoder;
 use futures::{sink::SinkExt, stream::StreamExt};
-use std::sync::Arc;
+use std::{
+  io::Write,
+  sync::Arc,
+  time::{Duration, Instant},
+};
 use uuid::Uuid;
 
 #[derive(serde::Deserialize)]
@@ -40,6 +46,11 @@ async fn handle_socket(
   req_spectate: bool,
 ) {
   let (mut sender, mut receiver) = socket.split();
+
+  const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
+  const CLIENT_TIMEOUT: Duration = Duration::from_secs(15);
+  let mut heartbeat_interval = tokio::time::interval(HEARTBEAT_INTERVAL);
+  heartbeat_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
   let (rx, _tx) = {
     let r_lock = match state.rooms.get(&room_id) {
@@ -76,29 +87,34 @@ async fn handle_socket(
       if let Ok(json) =
         serde_json::to_string(&serde_json::json!({ "type": "update", "data": view }))
       {
-        let _ = sender.send(Message::text(json)).await;
+        let bin = compress_msg(&json);
+        let _ = sender.send(Message::binary(bin)).await;
       }
     }
   }
 
+  let mut last_heartbeat = Instant::now();
+
   loop {
     tokio::select! {
       Some(Ok(msg)) = receiver.next() => {
+        last_heartbeat = Instant::now();
         match msg {
-           Message::Text(text) => {
-             // Spectators shouldn't really send actions, but we filter in room logic anyway
-             if let Ok(action) = serde_json::from_str::<ClientAction>(&text) {
-                if let Some(r_lock) = state.rooms.get(&room_id) {
-                  let mut room = r_lock.write().await;
-                  match action {
-                    ClientAction::Action { action } => room.handle_action(user.id, action),
-                    ClientAction::Answer { content } => room.handle_answer(user.id, content),
-                  }
+          Message::Text(text) => {
+            // Spectators shouldn't really send actions, but we filter in room logic anyway
+            if let Ok(action) = serde_json::from_str::<ClientAction>(&text) {
+              if let Some(r_lock) = state.rooms.get(&room_id) {
+                let mut room = r_lock.write().await;
+                match action {
+                  ClientAction::Action { action } => room.handle_action(user.id, action),
+                  ClientAction::Answer { content } => room.handle_answer(user.id, content),
                 }
-             }
-           },
-           Message::Close(_) => break,
-           _ => {}
+              }
+            }
+          },
+          Message::Pong(_) => {},
+          Message::Close(_) => break,
+          _ => {}
         }
       }
       Ok(msg) = broadcast_rx.recv() => {
@@ -108,7 +124,8 @@ async fn handle_socket(
               let room = r_lock.read().await;
               let view = room.get_view(Some(user.id), user.is_admin());
               if let Ok(json) = serde_json::to_string(&serde_json::json!({ "type": "update", "data": view })) {
-                if sender.send(Message::text(json)).await.is_err() { break; }
+                let bin = compress_msg(&json);
+                if sender.send(Message::binary(bin)).await.is_err() { break; }
               }
             }
           },
@@ -134,6 +151,14 @@ async fn handle_socket(
           }
         }
       }
+      // Heartbeat check using interval to avoid reset on other events
+      _ = heartbeat_interval.tick() => {
+        if Instant::now().duration_since(last_heartbeat) > CLIENT_TIMEOUT {
+          // Client timed out
+          break;
+        }
+        let _ = sender.send(Message::Ping(vec![].into())).await;
+      }
     }
   }
 
@@ -142,4 +167,10 @@ async fn handle_socket(
     let mut room = r_lock.write().await;
     room.leave(user.id);
   }
+}
+
+fn compress_msg(text: &str) -> Vec<u8> {
+  let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+  encoder.write_all(text.as_bytes()).unwrap();
+  encoder.finish().unwrap()
 }

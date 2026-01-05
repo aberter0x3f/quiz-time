@@ -259,6 +259,7 @@
       if (IS_SPECTATE) url += "&spectate=true";
 
       ws = new WebSocket(url);
+      ws.binaryType = "arraybuffer";
 
       ws.onopen = () => {
         $("#connection-status div")
@@ -290,8 +291,19 @@
         }
       };
 
-      ws.onmessage = (e) => {
-        const payload = JSON.parse(e.data);
+      ws.onmessage = async (e) => {
+        let txt;
+        if (e.data instanceof ArrayBuffer) {
+          const ds = new DecompressionStream("gzip");
+          const writer = ds.writable.getWriter();
+          writer.write(e.data);
+          writer.close();
+          txt = await new Response(ds.readable).text();
+        } else {
+          txt = e.data;
+        }
+
+        const payload = JSON.parse(txt);
         if (payload.type === "update") {
           gameState = payload.data;
           // Update local deadline reference
@@ -495,21 +507,53 @@
     }
 
     function renderChainGrid(grid) {
-      const el = $("#chain-grid").empty();
-      grid.forEach((cell) => {
-        const div = $(`<div class="char-cell"></div>`);
-        if (cell.char_content) div.text(cell.char_content);
-        if (cell.owner_color_hue != null) {
-          div.css({
-            "background-color": `hsl(${cell.owner_color_hue}, 70%, 90%)`,
-            "border-color": `hsl(${cell.owner_color_hue}, 60%, 70%)`,
-            color: `hsl(${cell.owner_color_hue}, 80%, 30%)`,
-          });
-        } else {
-          div.css({ "background-color": "#f3f3f3", color: "#ccc" });
+      const container = document.getElementById("chain-grid");
+
+      // 1. 初始化 DOM (如果数量不匹配，视为初始化/重置)
+      // 使用 DocumentFragment 避免频繁回流
+      if (container.children.length !== grid.length) {
+        container.innerHTML = "";
+        const fragment = document.createDocumentFragment();
+        for (let i = 0; i < grid.length; i++) {
+          const div = document.createElement("div");
+          div.className = "char-cell";
+          // 设置 ID 方便后续 O(1) 访问
+          div.id = `cg-${i}`;
+          fragment.appendChild(div);
         }
-        el.append(div);
-      });
+        container.appendChild(fragment);
+      }
+
+      // 2. Diff 更新 (仅更新变化的节点)
+      for (let i = 0; i < grid.length; i++) {
+        const cell = grid[i];
+        const div = document.getElementById(`cg-${i}`);
+        if (!div) continue;
+
+        // 更新文本: 仅当内容变化时操作 DOM
+        const newText = cell.char_content || "";
+        if (div.textContent !== newText) {
+          div.textContent = newText;
+        }
+
+        // 更新样式: 使用 data 属性缓存 hue 值，避免读取 style 字符串进行比较
+        const prevHue = div.getAttribute("data-hue");
+        const newHue =
+          cell.owner_color_hue != null ? String(cell.owner_color_hue) : "none";
+
+        if (prevHue !== newHue) {
+          div.setAttribute("data-hue", newHue);
+          if (cell.owner_color_hue != null) {
+            div.style.backgroundColor = `hsl(${cell.owner_color_hue}, 70%, 90%)`;
+            div.style.borderColor = `hsl(${cell.owner_color_hue}, 60%, 70%)`;
+            div.style.color = `hsl(${cell.owner_color_hue}, 80%, 30%)`;
+          } else {
+            div.style.backgroundColor = "#f3f3f3";
+            div.style.borderColor = "#ddd"; // 恢复 CSS 默认
+            div.style.color = "#ccc";
+          }
+        }
+      }
     }
 
     function renderPinyin(ps) {
@@ -524,14 +568,28 @@
         rf.append(tag(t, ps.banned_finals.includes(t))),
       );
 
-      const h = $("#py-history").empty();
-      ps.history.forEach((item) => {
-        h.append(
-          `<div style="margin-bottom:4px;"><strong>${item.player}:</strong> ${item.content} ${item.is_guess ? "(Guess)" : ""}</div>`,
-        );
-      });
-      // Scroll to bottom
-      h.scrollTop(h[0].scrollHeight);
+      // 优化 History: 仅追加新条目，避免重绘整个列表
+      const h = document.getElementById("py-history");
+      // 如果历史记录变少了（新游戏开始），清空
+      if (ps.history.length < h.children.length) {
+        h.innerHTML = "";
+      }
+
+      // 仅追加新增的部分
+      if (ps.history.length > h.children.length) {
+        const startIdx = h.children.length;
+        const fragment = document.createDocumentFragment();
+        for (let i = startIdx; i < ps.history.length; i++) {
+          const item = ps.history[i];
+          const div = document.createElement("div");
+          div.style.marginBottom = "4px";
+          div.innerHTML = `<strong>${item.player}:</strong> ${_.escape(item.content)} ${item.is_guess ? "(Guess)" : ""}`;
+          fragment.appendChild(div);
+        }
+        h.appendChild(fragment);
+        // Scroll to bottom
+        h.scrollTop = h.scrollHeight;
+      }
     }
 
     function renderControls() {

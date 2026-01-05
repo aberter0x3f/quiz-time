@@ -171,6 +171,22 @@ impl Room {
     let _ = self.tx.send(InternalMsg::StateUpdated);
   }
 
+  /// Clean up players who are marked as offline
+  fn kick_offline_players(&mut self) {
+    let offline_ids: Vec<i64> = self
+      .players
+      .iter()
+      .filter(|(_, p)| !p.is_online)
+      .map(|(k, _)| *k)
+      .collect();
+
+    if !offline_ids.is_empty() {
+      for pid in offline_ids {
+        self.kick(pid);
+      }
+    }
+  }
+
   pub fn handle_action(&mut self, user_id: i64, action: String) {
     // Spectators cannot act
     if let Some(p) = self.players.get(&user_id) {
@@ -199,10 +215,25 @@ impl Room {
   }
 
   pub fn tick(&mut self, _global_tx: &broadcast::Sender<InternalMsg>) {
+    let mut should_clean = false;
     match &mut self.session {
-      GameSession::Chain(g) => g.tick(&self.tx, &self.players),
-      GameSession::Pinyin(g) => g.tick(&self.tx, &self.players),
+      GameSession::Chain(g) => {
+        g.tick(&self.tx, &self.players);
+        if g.phase == GamePhase::Settlement {
+          should_clean = true;
+        }
+      }
+      GameSession::Pinyin(g) => {
+        g.tick(&self.tx, &self.players);
+        if g.phase == GamePhase::Settlement {
+          should_clean = true;
+        }
+      }
       _ => {}
+    }
+
+    if should_clean {
+      self.kick_offline_players();
     }
   }
 
@@ -249,6 +280,7 @@ impl Room {
 
   pub fn stop_game(&mut self) {
     self.session = GameSession::None;
+    self.kick_offline_players();
     let _ = self.tx.send(InternalMsg::StateUpdated);
   }
 
